@@ -1,0 +1,12 @@
+yt-dlp
+faster-whisper
+ctranslate2
+sentencepiece
+huggingface_hub
+deep-translator
+edge-tts
+flask
+imageio-ffmpeg
+numpy
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

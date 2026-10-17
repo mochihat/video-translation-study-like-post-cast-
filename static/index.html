@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lồng tiếng Việt cho YouTube</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7385; --line:#e3e6ec; --accent:#d93025; --ok:#188038; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161b; --card:#1d2027; --text:#e8eaef; --muted:#9aa1b0; --line:#2d313b; --accent:#ff6b5e; --ok:#5bd38a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input, select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  input[type=range] { padding:0; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-top:12px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:11px 20px; font:inherit; font-weight:600; cursor:pointer; margin-top:14px; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); padding:6px 12px; margin:0; font-weight:400; }
+  .job { display:flex; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); cursor:pointer; }
+  .job:first-child { border-top:0; }
+  .job .t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .badge.done { color:var(--ok); border-color:var(--ok); }
+  .badge.error { color:var(--accent); border-color:var(--accent); }
+  .steps { display:flex; flex-direction:column; gap:6px; margin:12px 0; }
+  .step { display:flex; align-items:center; gap:10px; color:var(--muted); }
+  .step.active { color:var(--text); font-weight:600; }
+  .step.ok { color:var(--ok); }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; flex:1; max-width:240px; }
+  .bar > div { height:100%; background:var(--accent); transition: width .3s; }
+  video { width:100%; border-radius:8px; background:#000; margin-top:8px; }
+  .links a { color:var(--accent); margin-right:16px; }
+  pre { background:var(--bg); padding:10px; border-radius:8px; max-height:180px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { border-top:1px solid var(--line); padding:6px 8px; vertical-align:top; }
+  td.time { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; cursor:pointer; }
+  .seg-wrap { max-height:360px; overflow:auto; margin-top:12px; }
+  .err { color:var(--accent); }
+  h2 { font-size:17px; margin:0 0 8px; }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎬 Lồng tiếng Việt cho video YouTube</h1>
+  <p class="sub">Dán link video tiếng Trung hoặc tiếng Anh — hệ thống sẽ nghe, dịch và đọc lại bằng tiếng Việt.</p>
+
+  <div class="card">
+    <label for="url">Link YouTube</label>
+    <input id="url" placeholder="https://www.youtube.com/watch?v=...">
+    <div class="grid">
+      <div>
+        <label for="language">Ngôn ngữ gốc</label>
+        <select id="language">
+          <option value="auto">Tự nhận diện</option>
+          <option value="zh">Tiếng Trung</option>
+          <option value="en">Tiếng Anh</option>
+        </select>
+      </div>
+      <div>
+        <label for="voice">Giọng đọc</label>
+        <select id="voice">
+          <option value="female">Nữ – Hoài My</option>
+          <option value="male">Nam – Nam Minh</option>
+        </select>
+      </div>
+      <div>
+        <label for="model">Chất lượng nhận dạng</label>
+        <select id="model">
+          <option value="small">Nhanh (small)</option>
+          <option value="large-v3-turbo" selected>Tốt (large-v3-turbo)</option>
+          <option value="large-v3">Tốt nhất, chậm (large-v3)</option>
+        </select>
+      </div>
+      <div>
+        <label for="translator">Công cụ dịch</label>
+        <select id="translator">
+          <option value="offline">Offline trên máy (NLLB)</option>
+          <option value="google">Google Dịch (cần mạng)</option>
+        </select>
+      </div>
+      <div>
+        <label for="bg">Âm lượng tiếng gốc: <span id="bgv">25%</span></label>
+        <input id="bg" type="range" min="0" max="100" value="25">
+      </div>
+    </div>
+    <button id="go">Bắt đầu lồng tiếng</button>
+    <span id="formErr" class="err"></span>
+  </div>
+
+  <div class="card" id="detail" hidden></div>
+
+  <div class="card">
+    <h2>Lịch sử</h2>
+    <div id="jobs"><span class="sub">Chưa có video nào.</span></div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const STATUS = { queued:"Đang chờ", running:"Đang xử lý", done:"Hoàn tất", error:"Lỗi" };
+let STEPS = [], current = null, timer = null, renderedDone = null;
+
+$("#bg").oninput = e => $("#bgv").textContent = e.target.value + "%";
+
+$("#go").onclick = async () => {
+  $("#formErr").textContent = "";
+  const body = {
+    url: $("#url").value, language: $("#language").value, voice: $("#voice").value,
+    model: $("#model").value, translator: $("#translator").value, bg_volume: $("#bg").value / 100,
+  };
+  const r = await fetch("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) { $("#formErr").textContent = j.error; return; }
+  $("#url").value = "";
+  show(j.id);
+  loadJobs();
+};
+
+async function loadJobs() {
+  const list = await (await fetch("/api/jobs")).json();
+  if (!list.length) return;
+  $("#jobs").innerHTML = list.map(j => `
+    <div class="job" data-id="${j.id}">
+      <span class="t">${esc(j.title)}</span>
+      <span class="badge ${j.status}">${STATUS[j.status]}</span>
+    </div>`).join("");
+  document.querySelectorAll(".job").forEach(el => el.onclick = () => show(el.dataset.id));
+}
+
+function fmt(t) { const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${String(s).padStart(2,"0")}`; }
+
+async function show(id) {
+  current = id; renderedDone = null;
+  clearTimeout(timer);
+  await refresh();
+  $("#detail").scrollIntoView({ behavior:"smooth" });
+}
+
+async function refresh() {
+  const id = current;
+  const j = await (await fetch("/api/jobs/" + id)).json();
+  if (id !== current) return;
+  const d = $("#detail");
+  d.hidden = false;
+
+  if (j.status === "done") {
+    if (renderedDone === id) return;
+    renderedDone = id;
+    d.innerHTML = `
+      <div class="row"><h2>${esc(j.title)}</h2><button class="ghost" id="del">Xoá</button></div>
+      <video id="player" controls src="/files/${id}/dubbed.mp4">
+        <track kind="subtitles" srclang="vi" label="Tiếng Việt" src="/files/${id}/vi.srt" default>
+      </video>
+      <p class="links">
+        <a href="/files/${id}/dubbed.mp4?dl=1">⬇ Tải video lồng tiếng</a>
+        <a href="/files/${id}/vi.srt?dl=1">⬇ Phụ đề Việt (.srt)</a>
+        <a href="/files/${id}/original.srt?dl=1">⬇ Phụ đề gốc (.srt)</a>
+      </p>
+      <div class="seg-wrap"><table>${(j.segments || []).map(s => `
+        <tr><td class="time" data-t="${s.start}">${fmt(s.start)}</td><td>${esc(s.text)}</td><td>${esc(s.vi)}</td></tr>`).join("")}
+      </table></div>`;
+    // Trình duyệt chỉ đọc phụ đề dạng VTT, chuyển từ SRT
+    fetch(`/files/${id}/vi.srt`).then(r => r.text()).then(srt => {
+      const vtt = "WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
+      d.querySelector("track").src = URL.createObjectURL(new Blob([vtt], { type:"text/vtt" }));
+    });
+    d.querySelectorAll("td.time").forEach(td => td.onclick = () => { const p = $("#player"); p.currentTime = +td.dataset.t; p.play(); });
+    $("#del").onclick = async () => {
+      if (!confirm("Xoá video này?")) return;
+      await fetch("/api/jobs/" + id, { method:"DELETE" });
+      d.hidden = true; current = null;
+      $("#jobs").innerHTML = '<span class="sub">Chưa có video nào.</span>';
+      loadJobs();
+    };
+    loadJobs();
+    return;
+  }
+
+  const idx = STEPS.findIndex(s => s.id === j.step);
+  d.innerHTML = `
+    <div class="row"><h2>${esc(j.title)}</h2><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
+    <div class="steps">${STEPS.map((s, i) => {
+      const cls = j.status === "error" && i === idx ? "" : i < idx ? "ok" : i === idx ? "active" : "";
+      const mark = i < idx ? "✓" : i === idx ? (j.status === "error" ? "✗" : "●") : "○";
+      const bar = i === idx && j.status === "running" ? `<div class="bar"><div style="width:${j.progress*100}%"></div></div>` : "";
+      return `<div class="step ${cls}"><span>${mark}</span><span>${s.name}</span>${bar}</div>`;
+    }).join("")}</div>
+    ${j.error ? `<p class="err">Lỗi: ${esc(j.error)}</p>` : ""}
+    <pre>${esc(j.logs.join("\n")) || "Đang chờ đến lượt..."}</pre>
+    ${j.status === "error" ? '<button class="ghost" id="del">Xoá</button>' : ""}`;
+  if (j.status === "error") {
+    $("#del").onclick = async () => { await fetch("/api/jobs/" + id, { method:"DELETE" }); d.hidden = true; loadJobs(); location.reload(); };
+    loadJobs();
+    return;
+  }
+  timer = setTimeout(refresh, 1500);
+}
+
+(async () => {
+  STEPS = await (await fetch("/api/steps")).json();
+  loadJobs();
+})();
+</script>
+</body>
+</html>
