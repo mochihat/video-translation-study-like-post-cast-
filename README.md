@@ -28,10 +28,44 @@ Tiếng gốc được giữ lại ở mức nhỏ làm nền (chỉnh được)
 git clone https://github.com/mochihat/video-translation-study-like-post-cast-.git
 cd video-translation-study-like-post-cast-
 ./setup.sh      # chỉ chạy lần đầu
-./run.sh        # khởi động
+./run.sh        # khởi động (hoặc dùng install-service.sh bên dưới)
 ```
 
 Mở trình duyệt: **http://localhost:5000**
+
+### Cho web tự chạy khi bật máy (khuyên dùng)
+
+```bash
+./install-service.sh            # cài một lần, từ đó chỉ cần mở http://localhost:5000
+./install-service.sh --remove   # gỡ
+journalctl --user -u youtube-dub -f   # xem log
+```
+
+## Thư viện video
+
+- Mọi video đã lồng tiếng được lưu trên máy (thư mục `jobs/`) và hiện ở trang chủ kèm ảnh bìa — mở lại xem bất cứ lúc nào, không cần mạng.
+- Mỗi video có link riêng (`http://localhost:5000/#v=...`) để lưu bookmark.
+- Web nhớ vị trí đang xem dở; bảng lời thoại song ngữ tự cuộn theo video.
+- Dán lại link đã làm → mở bản đã lưu thay vì làm lại (muốn làm lại thì bấm **Làm lại**).
+- Sau khi xong, file tạm được xoá — chỉ giữ video lồng tiếng, phụ đề và ảnh bìa.
+
+## Dịch cả playlist (treo máy)
+
+1. Dán link playlist (`https://www.youtube.com/playlist?list=...` hoặc link video có `&list=...`), để tick **Dịch toàn bộ playlist**.
+2. Bấm **Bắt đầu** rồi có thể đóng trình duyệt — các video được xử lý lần lượt.
+
+Trong lúc chạy:
+- Máy **không tự ngủ**, kể cả khi gập nắp laptop (nên cắm sạc). Xong hết thì máy ngủ lại bình thường.
+- Nghỉ 20–40 giây giữa các video để YouTube không chặn.
+- Bị YouTube chặn ("not a bot") hoặc mất mạng → tạm dừng và tự thử lại sau 5, 10, 20, 30 phút… (tối đa ~7 giờ), không bỏ video.
+- Lỗi khác → tự thử lại 1 lần; video lỗi không làm dừng các video còn lại, có nút **Thử lại**.
+- Tắt máy/khởi động lại giữa chừng → lần sau web tự làm tiếp các video còn dở.
+
+Khi xem video trong playlist, xem xong một video sẽ tự chuyển sang video tiếp theo.
+
+### Khi YouTube báo "Sign in to confirm you're not a bot"
+
+Đăng nhập YouTube trên Firefox, rồi ở ô **Đăng nhập YouTube qua** chọn **Firefox**. yt-dlp sẽ dùng phiên đăng nhập đó để tải.
 
 ## Tuỳ chọn trên giao diện
 
@@ -40,6 +74,7 @@ Mở trình duyệt: **http://localhost:5000**
 - **Chất lượng nhận dạng**: small (nhanh) / large-v3-turbo (mặc định) / large-v3 (tốt nhất)
 - **Công cụ dịch**: offline (NLLB, mặc định) hoặc Google Dịch — nếu Google chặn sẽ tự chuyển sang offline
 - **Âm lượng tiếng gốc**: 0–100%
+- **Đăng nhập YouTube qua**: không / Firefox / Chrome (chỉ cần khi bị YouTube chặn)
 
 Kết quả lưu trong thư mục `jobs/<mã>/`: `dubbed.mp4` (video lồng tiếng), `vi.srt`, `original.srt`.
 

@@ -1,4 +1,5 @@
-yt-dlp
+yt-dlp[default]
+deno
 faster-whisper
 ctranslate2
 sentencepiece

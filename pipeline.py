@@ -1,6 +1,7 @@
 """Quy trình: tải video YouTube -> nhận dạng giọng nói -> dịch sang tiếng Việt -> lồng tiếng -> ghép video."""
 import asyncio
 import json
+import shutil
 import subprocess
 import wave
 from pathlib import Path
@@ -60,13 +61,42 @@ def write_srt(path, segments, key):
 
 
 # ---------- 1. Tải video ----------
-def download(url, workdir, log):
+def firefox_profiles():
+    for p in (Path.home() / "snap/firefox/common/.mozilla/firefox", Path.home() / ".mozilla/firefox"):
+        if p.is_dir():
+            return str(p)
+    return None
+
+
+def cookie_opts(browser):
+    """Dùng phiên đăng nhập YouTube trong trình duyệt khi YouTube đòi xác minh 'không phải bot'."""
+    if browser == "firefox":
+        return {"cookiesfrombrowser": ("firefox", firefox_profiles(), None, None)}
+    if browser in ("chrome", "chromium"):
+        return {"cookiesfrombrowser": (browser, None, None, None)}
+    return {}
+
+
+def transient_reason(err):
+    """Lỗi tạm thời (bị YouTube chặn, mất mạng) thì nên chờ rồi thử lại thay vì bỏ video."""
+    msg = str(err).lower()
+    if any(k in msg for k in ("not a bot", "http error 429", "too many requests", "rate-limit")):
+        return "YouTube đang tạm chặn tải video"
+    if any(k in msg for k in ("name resolution", "failed to resolve", "network is unreachable",
+                              "connection reset", "connection refused", "timed out", "no internet")):
+        return "Mất kết nối mạng"
+    return None
+
+
+def download(url, workdir, log, browser=None):
     opts = {
+        **cookie_opts(browser),
         # ưu tiên H.264 để mọi trình duyệt/điện thoại đều phát được
         "format": "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=720][ext=mp4]+ba[ext=m4a]"
                   "/b[height<=720][ext=mp4]/bv*[height<=720]+ba/b",
         "merge_output_format": "mp4",
-        "outtmpl": str(workdir / "source.%(ext)s"),
+        "outtmpl": {"default": str(workdir / "source.%(ext)s"), "thumbnail": str(workdir / "thumb.%(ext)s")},
+        "writethumbnail": True,
         "ffmpeg_location": FFMPEG,
         "noplaylist": True,
         "quiet": True,
@@ -74,13 +104,20 @@ def download(url, workdir, log):
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-    video = next(workdir.glob("source.*"))
+    video = next(p for p in workdir.glob("source.*") if p.suffix in (".mp4", ".mkv", ".webm"))
     if video.suffix != ".mp4":
         ffmpeg("-i", str(video), "-c:v", "libx264", "-c:a", "aac", str(workdir / "source.mp4"))
         video.unlink()
         video = workdir / "source.mp4"
+    # ảnh bìa lưu trên máy để thư viện xem được cả khi không có mạng
+    for thumb in workdir.glob("thumb.*"):
+        try:
+            ffmpeg("-i", str(thumb), "-vf", "scale=480:-2", "-frames:v", "1", str(workdir / "cover.jpg"))
+        except RuntimeError:
+            pass
+        thumb.unlink()
     log(f"Đã tải: {info.get('title')}")
-    return video, info.get("title", "video")
+    return video, info
 
 
 # ---------- 2. Nhận dạng giọng nói ----------
@@ -320,9 +357,14 @@ def run_pipeline(job, workdir: Path, update):
     """job: dict cấu hình. update(step=..., progress=..., log=...) báo tiến độ."""
     log = lambda m: update(log=m)
 
+    # dọn file dở dang của lần chạy trước (khi thử lại hoặc máy tắt giữa chừng)
+    for p in workdir.iterdir():
+        if p.name != "job.json":
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+
     update(step="download", progress=0)
-    video, title = download(job["url"], workdir, log)
-    update(title=title)
+    video, info = download(job["url"], workdir, log, job.get("cookies"))
+    update(title=info.get("title"), video_id=info.get("id"), duration=info.get("duration"))
 
     update(step="transcribe", progress=0)
     audio16 = workdir / "audio16k.wav"
@@ -345,5 +387,10 @@ def run_pipeline(job, workdir: Path, update):
 
     update(step="mux", progress=0)
     mux(video, dub, workdir / "vi.srt", job["bg_volume"], workdir / "dubbed.mp4")
+
+    # chỉ giữ video thành phẩm, phụ đề và ảnh bìa để tiết kiệm ổ cứng
+    for name in ("source.mp4", "audio16k.wav", "dub.wav"):
+        (workdir / name).unlink(missing_ok=True)
+    shutil.rmtree(workdir / "tts", ignore_errors=True)
     update(progress=1)
     log("Hoàn tất!")
