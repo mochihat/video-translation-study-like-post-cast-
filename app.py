@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 from flask import Flask, abort, jsonify, request, send_from_directory
 
+import storage
 from pipeline import STEPS, cookie_opts, run_pipeline, transient_reason
 
 BASE = Path(__file__).parent
@@ -45,6 +46,13 @@ def load_existing():
     for f in JOBS_DIR.glob("*/job.json"):
         job = json.loads(f.read_text("utf-8"))
         jobs[job["id"]] = job
+        job.setdefault("video_at", "local")
+        if job["status"] != "done":
+            # bản cũ để file tạm (video gốc, âm thanh...) ngay trong jobs/<id>; giờ file tạm nằm ở tmp/
+            for p in f.parent.iterdir():
+                if p.name != "job.json":
+                    shutil.rmtree(p) if p.is_dir() else p.unlink()
+    shutil.rmtree(BASE / "tmp", ignore_errors=True)  # file tạm của lần chạy trước
     for f in PLAYLISTS_DIR.glob("*.json"):
         pl = json.loads(f.read_text("utf-8"))
         playlists[pl["id"]] = pl
@@ -102,7 +110,6 @@ def worker():
             continue
         awake.on()
         current["id"] = job_id
-        workdir = JOBS_DIR / job_id
 
         def update(step=None, progress=None, log=None, **fields):
             with lock:
@@ -120,12 +127,22 @@ def worker():
         attempt = 0
         waits = iter([5, 10, 20] + [30] * 12)  # phút chờ khi YouTube chặn (tổng ~7 giờ)
         while True:
+            loc = wait_for_storage(job)
+            if job["status"] == "deleted":
+                break
             try:
+                workdir = storage.tmp_dir(loc, job_id)
+                workdir.mkdir(parents=True, exist_ok=True)
                 run_pipeline(job, workdir, update)
+                finalize(job, workdir, loc)
                 job["status"] = "done"
                 break
             except Exception as e:
                 traceback.print_exc()
+                if not storage.check(loc)[0]:
+                    # ổ bị rút ra / đầy giữa chừng: chờ ổ sẵn sàng rồi làm lại video này
+                    update(log=f"{storage.check(loc)[1]} — tạm dừng, sẽ làm lại video này khi ổ sẵn sàng")
+                    continue
                 reason = transient_reason(e)
                 if reason:
                     # lỗi tạm thời: dừng cả hàng đợi rồi thử lại, không đánh lỗi video
@@ -150,6 +167,36 @@ def worker():
         save(job)
         if not work_queue.empty():
             time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
+
+
+def wait_for_storage(job):
+    """Chờ tới khi nơi lưu video đang chọn dùng được (đã cắm, ghi được, còn chỗ)."""
+    while True:
+        loc = storage.current()
+        ok, reason = storage.check(loc)
+        if ok or job["status"] == "deleted":
+            current["paused_until"] = None
+            return loc
+        current["paused_until"] = time.time() + 30
+        current["pause_reason"] = f"{storage.describe(loc)}: {reason}"
+        time.sleep(30)
+
+
+def finalize(job, workdir, loc):
+    """Video thành phẩm để lại trên nơi lưu; phụ đề, lời thoại, ảnh bìa đưa về laptop."""
+    meta = JOBS_DIR / job["id"]
+    for name in ("vi.srt", "original.srt", "segments.json", "cover.jpg"):
+        if (workdir / name).exists():
+            (meta / name).unlink(missing_ok=True)
+            shutil.move(str(workdir / name), meta / name)
+    dest = storage.final_dir(loc, job["id"])
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(workdir / "dubbed.mp4"), dest / "dubbed.mp4.part")
+    (dest / "dubbed.mp4.part").replace(dest / "dubbed.mp4")
+    if workdir != dest:
+        shutil.rmtree(workdir, ignore_errors=True)
+    job["video_at"] = loc
+    storage.remember_label(loc)
 
 
 def video_id_from_url(url):
@@ -378,7 +425,8 @@ def library():
                     "failed": sum(j["status"] == "error" for j in items),
                     "missing": len(pl["entries"]) - len(items)})
     return jsonify(
-        jobs=[light(j) for j in sorted(jobs.values(), key=lambda j: j["created"], reverse=True)],
+        jobs=[with_video_state(j) for j in sorted(jobs.values(), key=lambda j: j["created"], reverse=True)],
+        storage=storage.describe(storage.current()),
         playlists=pls,
         current=current["id"],
         paused_until=current["paused_until"],
@@ -390,7 +438,7 @@ def library():
 @app.get("/api/jobs/<job_id>")
 def get_job(job_id):
     job = jobs.get(job_id) or abort(404)
-    out = dict(job)
+    out = {**job, **with_video_state(job)}
     seg_file = JOBS_DIR / job_id / "segments.json"
     if job["status"] == "done" and seg_file.exists():
         out["segments"] = json.loads(seg_file.read_text("utf-8"))
@@ -412,6 +460,11 @@ def remove_job(job_id):
         return False
     job["status"] = "deleted"  # để worker bỏ qua nếu còn trong hàng đợi
     shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+    if job.get("video_at", "local") != "local":
+        try:  # ổ ngoài chưa cắm thì không xoá được file video trên đó
+            shutil.rmtree(storage.final_dir(job["video_at"], job_id), ignore_errors=True)
+        except RuntimeError:
+            pass
     jobs.pop(job_id)
     # giữ lại vị trí trong playlist để sau này lồng tiếng lại đúng chỗ
     for pl in playlists.values():
@@ -447,7 +500,101 @@ def delete_playlist(pl_id):
 def files(job_id, name):
     if name not in ("dubbed.mp4", "vi.srt", "original.srt", "cover.jpg") or job_id not in jobs:
         abort(404)
-    return send_from_directory(JOBS_DIR / job_id, name, as_attachment=request.args.get("dl") == "1")
+    folder = JOBS_DIR / job_id
+    if name == "dubbed.mp4":
+        path = storage.video_path(jobs[job_id])
+        if not path:
+            return jsonify(error=f"Video nằm trên {storage.describe(jobs[job_id]['video_at'])} — hãy cắm ổ vào"), 404
+        folder = path.parent
+    return send_from_directory(folder, name, as_attachment=request.args.get("dl") == "1")
+
+
+def with_video_state(job):
+    out = light(job)
+    if job["status"] == "done":
+        out["video_ok"] = storage.video_path(job) is not None
+        out["local_copy"] = job.get("video_at", "local") != "local" and (JOBS_DIR / job["id"] / "dubbed.mp4").exists()
+        out["video_place"] = storage.describe(job.get("video_at", "local"))
+    return out
+
+
+@app.post("/api/jobs/<job_id>/keep-local")
+def keep_local(job_id):
+    """Chép / bỏ bản video trên laptop để xem được cả khi không cắm ổ ngoài."""
+    job = jobs.get(job_id) or abort(404)
+    local = JOBS_DIR / job_id / "dubbed.mp4"
+    if job.get("video_at", "local") == "local":
+        return jsonify(error="Video này vốn đã nằm trên laptop"), 400
+    if request.get_json(force=True).get("keep"):
+        try:
+            src = storage.root(job["video_at"]) / job_id / "dubbed.mp4"
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        if shutil.disk_usage(JOBS_DIR).free - src.stat().st_size < storage.MIN_FREE:
+            return jsonify(error="Laptop không đủ chỗ trống để giữ video này"), 400
+        shutil.copy2(src, local.with_suffix(".part"))
+        local.with_suffix(".part").replace(local)
+    else:
+        local.unlink(missing_ok=True)
+    return jsonify(with_video_state(job))
+
+
+move_state = {"running": False, "total": 0, "done": 0, "skipped": 0, "title": None, "error": None}
+
+
+def move_videos(target):
+    """Chuyển các video đã xong sang nơi lưu mới (chép xong, kiểm tra kích thước rồi mới xoá bản cũ)."""
+    todo = [j for j in jobs.values() if j["status"] == "done" and j.get("video_at", "local") != target]
+    move_state.update(running=True, total=len(todo), done=0, skipped=0, title=None, error=None)
+    try:
+        for job in todo:
+            move_state["title"] = job["title"]
+            old_loc = job.get("video_at", "local")
+            try:
+                src = storage.root(old_loc) / job["id"] / "dubbed.mp4"
+            except RuntimeError:
+                src = None
+            if not src or not src.exists():
+                move_state["skipped"] += 1  # ổ cũ chưa cắm: để nguyên
+                continue
+            dest = storage.final_dir(target, job["id"])
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / "dubbed.mp4.part")
+            if (dest / "dubbed.mp4.part").stat().st_size != src.stat().st_size:
+                raise RuntimeError(f"Chép không trọn vẹn: {job['title']}")
+            (dest / "dubbed.mp4.part").replace(dest / "dubbed.mp4")
+            job["video_at"] = target
+            save(job)
+            if old_loc != "local":
+                shutil.rmtree(src.parent, ignore_errors=True)
+            elif target != "local":
+                src.unlink()
+            move_state["done"] += 1
+    except Exception as e:
+        traceback.print_exc()
+        move_state["error"] = str(e)
+    move_state.update(running=False, title=None)
+
+
+@app.get("/api/storage")
+def get_storage():
+    return jsonify(current=storage.current(), options=storage.options(), moving=move_state,
+                   pending_move=sum(j["status"] == "done" and j.get("video_at", "local") != storage.current()
+                                    for j in jobs.values()))
+
+
+@app.post("/api/storage")
+def set_storage():
+    data = request.get_json(force=True)
+    loc = data.get("location") or "local"
+    ok, reason = storage.check(loc)
+    if not ok:
+        return jsonify(error=reason), 400
+    storage.set_current(loc)
+    storage.remember_label(loc)
+    if data.get("move") and not move_state["running"]:
+        threading.Thread(target=move_videos, args=(loc,), daemon=True).start()
+    return get_storage()
 
 
 if __name__ == "__main__":

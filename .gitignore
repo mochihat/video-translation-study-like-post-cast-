@@ -4,3 +4,5 @@ jobs/
 server.log
 *.pyc
 playlists/
+config.json
+tmp/

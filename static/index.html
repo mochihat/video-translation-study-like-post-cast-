@@ -70,11 +70,18 @@
   .pitem .t { font-size:13px; flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .pitem .n { color:var(--muted); font-size:12px; width:20px; text-align:right; flex:none; }
   .back { display:inline-block; margin-bottom:12px; }
+  .opt { display:flex; gap:12px; align-items:flex-start; padding:12px; border:1px solid var(--line); border-radius:10px; margin-bottom:10px; cursor:pointer; }
+  .opt.sel { border-color:var(--accent); }
+  .opt.off { opacity:.7; }
+  .opt input { margin-top:4px; }
+  .opt .bar { margin-top:6px; max-width:320px; }
+  .noplay { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; padding:16px; border-radius:8px; background:var(--bg); border:1px dashed var(--line); }
 </style>
 </head>
 <body>
 <main>
-  <h1><a href="#">🎬 Lồng tiếng Việt cho YouTube</a></h1>
+  <div class="row"><h1><a href="#">🎬 Lồng tiếng Việt cho YouTube</a></h1>
+    <a href="#settings" class="muted" id="storageLink">💾 Nơi lưu video</a></div>
   <p class="sub">Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
   <div id="conn" class="banner" hidden><span>⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
     <button class="ghost" onclick="location.reload()">Tải lại trang</button></div>
@@ -189,7 +196,8 @@ function tile(j) {
     <div class="cover" style="background-image:url('${coverUrl(j)}')">${j.duration ? `<span class="dur">${fmt(j.duration)}</span>` : ""}</div>
     ${bar}
     <div class="info"><div class="t">${esc(j.title)}</div>
-      <div class="row" style="margin-top:6px"><span class="badge ${j.status}">${STATUS[j.status]}</span>${resumeLabel(j)}</div></div></a>`;
+      <div class="row" style="margin-top:6px"><span class="badge ${j.status}">${STATUS[j.status]}</span>${
+        j.status === "done" && !j.video_ok ? `<span class="muted" title="Video nằm trên ${esc(j.video_place)}">🔌 Cần cắm ổ</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
 function resumeLabel(j) {
@@ -223,6 +231,7 @@ function renderLibrary() {
 }
 
 function renderBanner() {
+  if (LIB.storage) $("#storageLink").textContent = "💾 Lưu tại: " + LIB.storage;
   const cur = LIB.jobs.find(j => j.id === LIB.current);
   $("#banner").innerHTML = cur ? `<div class="banner">
       <span>⏳</span>
@@ -288,7 +297,7 @@ async function renderVideo(id) {
   if (location.hash !== "#v=" + id) return;
   const pl = LIB.playlists.find(p => p.job_ids.includes(id));
   const back = pl ? `<a class="back" href="#p=${pl.id}">← ${esc(pl.title)}</a>` : '<a class="back" href="#">← Thư viện</a>';
-  const key = id + ":" + j.status;
+  const key = [id, j.status, j.video_ok, j.local_copy].join(":");
 
   if (j.status === "done") {
     if (renderedKey === key) { renderSide(pl, id); return; }
@@ -296,11 +305,18 @@ async function renderVideo(id) {
     $("#view").innerHTML = `${back}
       <div class="watch"><div>
         <div class="card">
-          <video id="player" controls autoplay src="/files/${id}/dubbed.mp4"><track kind="subtitles" srclang="vi" label="Tiếng Việt" default></video>
+          ${j.video_ok
+            ? `<video id="player" controls autoplay src="/files/${id}/dubbed.mp4"><track kind="subtitles" srclang="vi" label="Tiếng Việt" default></video>`
+            : `<div class="noplay"><div style="font-size:36px">🔌</div>
+                 <b>Video nằm trên ${esc(j.video_place)}</b>
+                 <span class="muted">Cắm ổ vào máy để xem — trang sẽ tự mở video khi nhận ổ. Lời thoại song ngữ bên dưới vẫn đọc được.</span></div>`}
           <div class="row" style="margin-top:10px"><h2 style="margin:0">${esc(j.title)}</h2>
             <span><button class="ghost" id="redo">Làm lại</button> <button class="ghost" id="del">Xoá</button></span></div>
+          <p class="muted" style="margin:6px 0 0">💾 Lưu tại: ${esc(j.video_place)}${j.local_copy ? " · có bản trên laptop" : ""}
+            ${j.video_at && j.video_at !== "local" && (j.video_ok || j.local_copy)
+              ? ` <button class="ghost" id="keep">${j.local_copy ? "Bỏ bản trên laptop" : "Giữ trên laptop (xem khi không cắm ổ)"}</button>` : ""}</p>
           <p class="links" style="margin-bottom:0">
-            <a href="/files/${id}/dubbed.mp4?dl=1">⬇ Video lồng tiếng</a>
+            ${j.video_ok ? `<a href="/files/${id}/dubbed.mp4?dl=1">⬇ Video lồng tiếng</a>` : ""}
             <a href="/files/${id}/vi.srt?dl=1">⬇ Phụ đề Việt</a>
             <a href="/files/${id}/original.srt?dl=1">⬇ Phụ đề gốc</a>
             <a href="${esc(j.url)}" target="_blank">↗ YouTube</a></p>
@@ -309,8 +325,13 @@ async function renderVideo(id) {
           <tr data-i="${i}"><td class="time" data-t="${s.start}">${fmt(s.start)}</td><td>${esc(s.text)}</td><td>${esc(s.vi)}</td></tr>`).join("")}
         </table></div></div>
       </div><div id="side"></div></div>`;
-    setupPlayer(j, pl);
+    if (j.video_ok) setupPlayer(j, pl);
     renderSide(pl, id);
+    if ($("#keep")) $("#keep").onclick = async e => {
+      e.target.disabled = true; e.target.textContent = j.local_copy ? "Đang xoá..." : "Đang chép về laptop...";
+      try { await api(`/api/jobs/${id}/keep-local`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ keep: !j.local_copy }) }); }
+      finally { renderedKey = null; renderVideo(id); }
+    };
     $("#del").onclick = async () => {
       if (!confirm("Xoá video này?")) return;
       await api("/api/jobs/" + id, { method:"DELETE" });
@@ -414,6 +435,59 @@ function setupPlayer(j, pl) {
   document.querySelectorAll("#segs td.time").forEach(td => td.onclick = () => { v.currentTime = +td.dataset.t; v.play(); });
 }
 
+// ---------- Trang chọn nơi lưu video ----------
+const gb = b => b == null ? "?" : (b / 1024 ** 3).toFixed(b < 10 * 1024 ** 3 ? 1 : 0) + " GB";
+
+async function renderSettings(full) {
+  let s;
+  try { s = await api("/api/storage"); } catch { return; }
+  if (location.hash !== "#settings") return;
+  const mv = s.moving;
+  const moveHtml = mv.running
+    ? `<p>⏳ Đang chuyển video ${mv.done + mv.skipped + 1}/${mv.total}: ${esc(mv.title || "")}</p>
+       <div class="bar ok"><div style="width:${mv.total ? (mv.done + mv.skipped) / mv.total * 100 : 0}%"></div></div>`
+    : mv.total ? `<p class="${mv.error ? "err" : "muted"}">${mv.error ? "Lỗi khi chuyển: " + esc(mv.error)
+        : `Đã chuyển ${mv.done} video${mv.skipped ? `, bỏ qua ${mv.skipped} video (ổ cũ chưa cắm)` : ""}.`}</p>` : "";
+  if (!full) { const m = $("#moveState"); if (m) m.innerHTML = moveHtml; return; }
+
+  $("#view").innerHTML = `<a class="back" href="#">← Thư viện</a>
+    <div class="card"><h2>💾 Nơi lưu video</h2>
+      <p class="muted">Video lồng tiếng (file nặng) và file tạm khi xử lý sẽ được lưu ở nơi bạn chọn.
+        Tên video, ảnh bìa, phụ đề và lời thoại song ngữ luôn nằm trên laptop, nên rút ổ ra vẫn xem được thư viện.</p>
+      ${s.options.map(o => {
+        const used = o.size && o.free != null ? 1 - o.free / o.size : null;
+        return `<label class="opt ${o.id === s.current ? "sel" : ""} ${o.ok ? "" : "off"}">
+          <input type="radio" name="loc" value="${esc(o.id)}" ${o.id === s.current ? "checked" : ""} ${o.ok || o.id === s.current ? "" : "disabled"}>
+          <div style="flex:1">
+            <b>${o.external ? "🔌" : "💻"} ${esc(o.label)}</b> ${o.id === s.current ? '<span class="badge done">Đang dùng</span>' : ""}
+            <div class="muted">${esc(o.path)}${o.fstype ? " · " + esc(o.fstype.toUpperCase()) : ""}
+              ${o.size ? ` · trống ${gb(o.free)} / ${gb(o.size)}` : ""}</div>
+            ${used != null ? `<div class="bar ${used > .9 ? "" : "ok"}"><div style="width:${used * 100}%"></div></div>` : ""}
+            ${o.reason ? `<div class="err" style="font-size:13px;margin-top:4px">${esc(o.reason)}</div>` : ""}
+          </div></label>`;
+      }).join("")}
+      ${s.pending_move ? `<label class="check"><input type="checkbox" id="moveOld" checked>
+        Chuyển ${s.pending_move} video đã có sang nơi lưu mới (giải phóng chỗ ở nơi cũ)</label>` : ""}
+      <div style="margin-top:14px"><button id="saveLoc">Lưu lựa chọn</button> <button class="ghost" id="rescan">Quét lại ổ</button>
+        <span id="locMsg" class="msg"></span></div>
+      <div id="moveState" style="margin-top:12px">${moveHtml}</div>
+    </div>`;
+  document.querySelectorAll("input[name=loc]").forEach(r => r.onchange = () => {
+    document.querySelectorAll(".opt").forEach(o => o.classList.toggle("sel", o.contains(r) && r.checked));
+  });
+  $("#rescan").onclick = () => renderSettings(true);
+  $("#saveLoc").onclick = async () => {
+    const loc = document.querySelector("input[name=loc]:checked")?.value, msg = $("#locMsg");
+    msg.className = "msg muted"; msg.textContent = "Đang kiểm tra ổ...";
+    try {
+      await api("/api/storage", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ location: loc, move: !!$("#moveOld")?.checked }) });
+      await renderSettings(true);
+      flash("Đã lưu. Video mới sẽ được lưu ở nơi bạn chọn.");
+    } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+  };
+}
+
 // ---------- Điều hướng ----------
 async function refreshLib() {
   try { LIB = await api("/api/library"); } catch { return; }
@@ -423,6 +497,11 @@ async function refreshLib() {
 async function route() {
   const h = location.hash.slice(1);
   if (h.startsWith("v=")) return renderVideo(h.slice(2));
+  if (h === "settings") {  // vẽ cả trang 1 lần, sau đó chỉ cập nhật tiến độ chuyển video
+    const full = renderedKey !== "settings";
+    renderedKey = "settings";
+    return renderSettings(full);
+  }
   renderedKey = null;
   if (h.startsWith("p=")) return renderPlaylist(h.slice(2));
   if (!$("#url")) { $("#view").innerHTML = formHtml(); bindForm(); }

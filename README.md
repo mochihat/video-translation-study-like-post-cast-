@@ -49,6 +49,18 @@ journalctl --user -u youtube-dub -f   # xem log
 - Dán lại link đã làm → mở bản đã lưu thay vì làm lại (muốn làm lại thì bấm **Làm lại**).
 - Sau khi xong, file tạm được xoá — chỉ giữ video lồng tiếng, phụ đề và ảnh bìa.
 
+## Nơi lưu video (ổ cứng ngoài)
+
+Bấm **💾 Nơi lưu video** ở góc trên trang để chọn lưu video trên laptop hay trên một phân vùng / ổ cứng gắn ngoài (NTFS, exFAT, ext4…). Ổ được nhận theo UUID nên cắm vào cổng USB nào cũng được.
+
+- Chỉ **video lồng tiếng và file tạm khi xử lý** nằm trên ổ đã chọn (`<ổ>/LongTiengVideos/`). Tên video, ảnh bìa, phụ đề, lời thoại song ngữ luôn ở trên laptop — rút ổ ra vẫn xem được thư viện và đọc lời thoại.
+- Đổi nơi lưu có thể tick **Chuyển video đã có** — chép xong và kiểm tra rồi mới xoá bản cũ.
+- Video trên ổ ngoài có nút **Giữ trên laptop** để chép một bản về máy, xem được khi không cắm ổ.
+- Ổ chưa cắm / đầy (dưới 3GB) / không ghi được → hàng đợi tự tạm dừng và báo trên trang; cắm ổ vào là tự chạy tiếp, video tự mở lại.
+
+**Ổ NTFS không mở được** ("volume is dirty"): ổ chưa được tháo an toàn hoặc Windows bật Fast Startup. Cắm vào Windows, chạy `chkdsk X: /f` rồi tháo an toàn; hoặc trên Linux: `sudo ntfsfix -d /dev/sdX1`.
+**Ổ ext4 báo không có quyền ghi**: `sudo chown $USER "/run/media/$USER/<tên ổ>"`.
+
 ## Dịch cả playlist (treo máy)
 
 1. Dán link playlist (`https://www.youtube.com/playlist?list=...` hoặc link video có `&list=...`), để tick **Dịch toàn bộ playlist**.
