@@ -138,8 +138,7 @@ def worker():
                 break
             try:
                 current["loc"] = loc
-                workdir = storage.tmp_dir(loc, job_id)
-                workdir.mkdir(parents=True, exist_ok=True)
+                workdir = fresh_workdir(loc, job_id)
                 run_pipeline(job, workdir, report)
                 # nếu vừa đổi nơi lưu trong lúc xử lý thì lưu thẳng vào nơi mới
                 new_loc = storage.current()
@@ -197,6 +196,20 @@ def wait_for_storage(job):
         current["paused_until"] = time.time() + wait
         current["pause_reason"] = f"{storage.describe(loc)}: {reason}"
         time.sleep(wait)
+
+
+def fresh_workdir(loc, job_id):
+    """Thư mục tạm trống cho video. Thư mục cũ không xoá được (vd. hỏng do ổ bị rút giữa chừng)
+    thì để nguyên và dùng thư mục mới, thay vì đánh lỗi cả video."""
+    workdir = storage.tmp_dir(loc, job_id)
+    try:
+        if workdir.exists():
+            shutil.rmtree(workdir)
+    except OSError as e:
+        print(f"  Không dọn được {workdir} ({e}), dùng thư mục tạm mới", flush=True)
+        workdir = workdir.with_name(f"{job_id}-{uuid.uuid4().hex[:4]}")
+    workdir.mkdir(parents=True, exist_ok=True)
+    return workdir
 
 
 def finalize(job, workdir, loc):
