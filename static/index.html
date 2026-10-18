@@ -76,6 +76,8 @@
 <main>
   <h1><a href="#">🎬 Lồng tiếng Việt cho YouTube</a></h1>
   <p class="sub">Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
+  <div id="conn" class="banner" hidden><span>⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
+    <button class="ghost" onclick="location.reload()">Tải lại trang</button></div>
   <div id="banner"></div>
   <div id="view"></div>
 </main>
@@ -95,7 +97,28 @@ function fmt(t) {
   return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(s).padStart(2,"0");
 }
 const coverUrl = j => j.status === "done" || j.video_id ? `/files/${j.id}/cover.jpg` : "";
-const api = async (url, opts) => { const r = await fetch(url, opts); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; };
+// ---------- Kết nối tới máy chủ: mất kết nối thì báo và tự thử lại ----------
+let online = true, reconnected = false;
+function setOnline(ok) {
+  if (ok === online) return;
+  online = ok;
+  $("#conn").hidden = ok;
+  if (ok) reconnected = true;  // lần làm mới kế tiếp sẽ vẽ lại trang đang xem
+}
+const offlineError = () => Object.assign(new Error("Mất kết nối tới máy chủ"), { offline: true });
+const api = async (url, opts) => {
+  let r;
+  try { r = await fetch(url, opts); } catch { setOnline(false); throw offlineError(); }
+  let j = {};
+  try { j = await r.json(); } catch {}
+  if (r.status >= 500 && !j.error) { setOnline(false); throw offlineError(); }
+  setOnline(true);
+  if (!r.ok) throw Object.assign(new Error(j.error || "Lỗi " + r.status), { status: r.status });
+  return j;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// thao tác (bấm nút) bị lỗi thì hiện thông báo thay vì im lặng
+window.addEventListener("unhandledrejection", e => { if (!e.reason?.offline) flash("Lỗi: " + (e.reason?.message || e.reason)); });
 
 // ---------- Trang chủ: form + thư viện ----------
 function formHtml() {
@@ -144,6 +167,7 @@ function bindForm() {
       $("#url").value = ""; $("#plWrap").hidden = true;
       if (r.playlist) {
         location.hash = "p=" + r.playlist.id;
+        if (r.updated) setTimeout(() => flash(r.added ? `Đã cập nhật playlist đã có: thêm ${r.added} video vào hàng đợi.` : "Playlist này đã có đủ video."), 300);
       } else {
         location.hash = "v=" + r.job.id;
         if (r.existing) setTimeout(() => flash("Video này đã được lồng tiếng trước đó — mở lại bản đã lưu."), 300);
@@ -215,24 +239,52 @@ function renderPlaylist(id) {
   const p = LIB.playlists.find(p => p.id === id);
   if (!p) { $("#view").innerHTML = '<a class="back" href="#">← Thư viện</a><p>Không tìm thấy playlist.</p>'; return; }
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
-  const items = p.job_ids.map(i => byId[i]).filter(Boolean);
+  const emptyTile = (e, i) => `<div class="tile" style="opacity:.75;cursor:default">
+    <div class="cover" style="background-image:url('${e.video_id ? `https://i.ytimg.com/vi/${e.video_id}/mqdefault.jpg` : ""}');filter:grayscale(1)"></div>
+    <div class="info"><div class="t">${esc(e.title || "Video đã xoá")}</div>
+      <div class="row" style="margin-top:6px"><span class="badge">Đã xoá</span>
+        <button class="ghost redo-slot" data-i="${i}">Lồng tiếng lại</button></div></div></div>`;
   $("#view").innerHTML = `<a class="back" href="#">← Thư viện</a>
     <div class="card"><div class="row"><h2 style="margin:0">${esc(p.title)}</h2>
-      <span><a class="muted" href="${esc(p.url)}" target="_blank">Mở trên YouTube</a> <button class="ghost" id="delPl">Xoá playlist</button></span></div>
-      <p class="muted">${p.done}/${p.total} video đã lồng tiếng${p.failed ? ` · ${p.failed} lỗi` : ""}</p>
+      <span><a class="muted" href="${esc(p.url)}" target="_blank">Mở trên YouTube</a>
+        <button class="ghost" id="syncPl" title="Thêm video mới, lồng tiếng lại video đã xoá và thử lại video lỗi">Cập nhật từ YouTube</button>
+        <button class="ghost" id="delPl">Xoá playlist</button></span></div>
+      <p class="muted">${p.done}/${p.total} video đã lồng tiếng${p.failed ? ` · <span class="err">${p.failed} lỗi</span>` : ""}${p.missing ? ` · ${p.missing} đã xoá` : ""}
+        ${p.failed ? ' <button class="ghost" id="retryPl">Thử lại video lỗi</button>' : ""}</p>
       <div class="bar ok"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div></div>
-    <div class="lib">${items.map(tile).join("")}</div>`;
+    <div class="lib">${p.entries.map((e, i) => byId[e.job_id] ? tile(byId[e.job_id]) : emptyTile(e, i)).join("")}</div>`;
   $("#delPl").onclick = async () => {
     if (!confirm("Xoá playlist này và toàn bộ video đã lồng tiếng trong đó?")) return;
     await api("/api/playlists/" + id, { method:"DELETE" });
     location.hash = "";
   };
+  $("#syncPl").onclick = async e => {
+    e.target.disabled = true; e.target.textContent = "Đang đọc playlist...";
+    try {
+      const r = await api(`/api/playlists/${id}/sync`, { method:"POST" });
+      flash(r.added ? `Đã thêm ${r.added} video vào hàng đợi.` : "Playlist đã đủ video, không có gì mới.");
+    } finally { await refreshLib(); renderPlaylist(id); }
+  };
+  if ($("#retryPl")) $("#retryPl").onclick = async () => {
+    const r = await api(`/api/playlists/${id}/retry-failed`, { method:"POST" });
+    flash(`Đã đưa ${r.count} video lỗi vào hàng đợi.`);
+    await refreshLib(); renderPlaylist(id);
+  };
+  document.querySelectorAll(".redo-slot").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    await api(`/api/playlists/${id}/slots/${b.dataset.i}`, { method:"POST" });
+    await refreshLib(); renderPlaylist(id);
+  });
 }
 
 // ---------- Trang xem / tiến độ một video ----------
 async function renderVideo(id) {
   let j;
-  try { j = await api("/api/jobs/" + id); } catch { $("#view").innerHTML = '<a class="back" href="#">← Thư viện</a><p>Không tìm thấy video.</p>'; return; }
+  try { j = await api("/api/jobs/" + id); } catch (e) {
+    // mất kết nối thì giữ nguyên trang, tự thử lại ở lần làm mới sau
+    if (!e.offline) $("#view").innerHTML = '<a class="back" href="#">← Thư viện</a><p>Không tìm thấy video (có thể đã bị xoá).</p>';
+    return;
+  }
   if (location.hash !== "#v=" + id) return;
   const pl = LIB.playlists.find(p => p.job_ids.includes(id));
   const back = pl ? `<a class="back" href="#p=${pl.id}">← ${esc(pl.title)}</a>` : '<a class="back" href="#">← Thư viện</a>';
@@ -298,7 +350,8 @@ function renderSide(pl, id) {
   if (!pl) { side.remove(); $(".watch").style.gridTemplateColumns = "1fr"; return; }
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
   side.innerHTML = `<div class="card"><h2>${esc(pl.title)}</h2><p class="muted">${pl.done}/${pl.total} video xong</p>
-    <div class="plist">${pl.job_ids.map((jid, n) => { const j = byId[jid]; if (!j) return "";
+    <div class="plist">${pl.entries.map((e, n) => { const jid = e.job_id, j = byId[jid];
+      if (!j) return `<div class="pitem" style="opacity:.6"><span class="n">${n + 1}</span><div class="t">${esc(e.title || "")}<br><span class="badge">Đã xoá</span></div></div>`;
       return `<a class="pitem ${jid === id ? "cur" : ""}" href="#v=${jid}"><span class="n">${n + 1}</span>
         <div class="cover" style="background-image:url('${coverUrl(j)}')"></div>
         <div class="t">${esc(j.title)}<br><span class="badge ${j.status}">${STATUS[j.status]}</span></div></a>`; }).join("")}</div></div>`;
@@ -308,11 +361,40 @@ function renderSide(pl, id) {
 function setupPlayer(j, pl) {
   const v = $("#player"), id = j.id;
   // trình duyệt chỉ đọc phụ đề dạng VTT
-  fetch(`/files/${id}/vi.srt`).then(r => r.text()).then(srt => {
-    v.querySelector("track").src = URL.createObjectURL(new Blob(["WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2")], { type:"text/vtt" }));
-  });
+  (async function loadTrack(tries = 0) {
+    try {
+      const r = await fetch(`/files/${id}/vi.srt`);
+      if (!r.ok) throw 0;
+      const srt = await r.text();
+      v.querySelector("track").src = URL.createObjectURL(new Blob(["WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2")], { type:"text/vtt" }));
+    } catch { if (tries < 20 && document.body.contains(v)) setTimeout(() => loadTrack(tries + 1), 3000); }
+  })();
   const saved = +store.get("pos:" + id);
-  v.addEventListener("loadedmetadata", () => { if (saved > 5 && saved < v.duration - 5) v.currentTime = saved; });
+  v.addEventListener("loadedmetadata", () => { if (saved > 5 && saved < v.duration - 5) v.currentTime = saved; }, { once:true });
+
+  // video lỗi hoặc đứng hình quá lâu (mạng chập chờn, máy chủ khởi động lại) -> tự tải lại tại đúng chỗ đang xem
+  let retries = 0, stallTimer = null, lastGood = 0;
+  const note = document.createElement("p");
+  note.className = "muted"; note.hidden = true;
+  v.after(note);
+  const reloadVideo = reason => {
+    clearTimeout(stallTimer);
+    if (!document.body.contains(v)) return;
+    const t = v.currentTime || lastGood || saved || 0, wasPaused = v.paused && retries === 0 && reason === "stall";
+    const wait = Math.min(2000 * 2 ** retries++, 30000);
+    note.hidden = false; note.textContent = `⚠️ ${reason === "stall" ? "Video bị đứng" : "Lỗi tải video"} — tự tải lại sau ${wait / 1000} giây…`;
+    setTimeout(() => {
+      if (!document.body.contains(v)) return;
+      v.src = `/files/${id}/dubbed.mp4?r=${Date.now()}`;
+      v.addEventListener("loadedmetadata", () => { v.currentTime = t; if (!wasPaused) v.play().catch(() => {}); }, { once:true });
+      v.load();
+    }, wait);
+  };
+  v.addEventListener("error", () => reloadVideo("error"));
+  v.addEventListener("waiting", () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => !v.paused && reloadVideo("stall"), 15000); });
+  v.addEventListener("playing", () => { clearTimeout(stallTimer); retries = 0; note.hidden = true; });
+  v.addEventListener("pause", () => clearTimeout(stallTimer));
+  v.addEventListener("timeupdate", () => { if (v.currentTime > 0) lastGood = v.currentTime; });
   let last = 0, curRow = null;
   v.addEventListener("timeupdate", () => {
     if (Math.abs(v.currentTime - last) > 3) { last = v.currentTime; store.set("pos:" + id, v.currentTime); }
@@ -350,12 +432,21 @@ async function route() {
 window.addEventListener("hashchange", async () => { renderedKey = null; $("#view").innerHTML = ""; await refreshLib(); route(); window.scrollTo(0, 0); });
 
 (async () => {
-  STEPS = await api("/api/steps");
+  // máy chủ chưa chạy (vừa bật máy) thì chờ và thử lại
+  while (true) { try { STEPS = await api("/api/steps"); break; } catch { await sleep(3000); } }
   await refreshLib();
   route();
   setInterval(async () => {
     await refreshLib();
+    if (!online) return;
     const h = location.hash.slice(1);
+    if (reconnected) {  // vừa kết nối lại: vẽ lại trang đang xem
+      reconnected = false;
+      if (!STEPS.length) STEPS = await api("/api/steps");
+      renderedKey = null;
+      if (!h && !$("#url")) $("#view").innerHTML = "";
+      return route();
+    }
     // không vẽ lại trang chủ khi đang gõ link
     if (!h && document.activeElement?.id === "url") return;
     route();

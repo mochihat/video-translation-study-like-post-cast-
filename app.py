@@ -48,6 +48,13 @@ def load_existing():
     for f in PLAYLISTS_DIR.glob("*.json"):
         pl = json.loads(f.read_text("utf-8"))
         playlists[pl["id"]] = pl
+        if "entries" not in pl:
+            migrate_playlist(pl)
+    # video dán lẻ nhưng thuộc một playlist (vị trí trống hoặc bản lỗi) -> đưa về đúng chỗ
+    in_playlist = {e["job_id"] for pl in playlists.values() for e in pl["entries"]}
+    for job in sorted(jobs.values(), key=lambda j: j["created"]):
+        if job["id"] not in in_playlist:
+            attach_to_playlists(job)
     # làm tiếp các video còn dở khi máy chủ bị tắt
     pending = sorted((j for j in jobs.values() if j["status"] in ("queued", "running")), key=lambda j: j["created"])
     for job in pending:
@@ -152,6 +159,20 @@ def video_id_from_url(url):
     return parse_qs(u.query).get("v", [None])[0]
 
 
+def list_id_from_url(url):
+    return parse_qs(urlparse(url).query).get("list", [None])[0]
+
+
+SETTING_DEFAULTS = {"language": "auto", "voice": "female", "model": "large-v3-turbo",
+                    "translator": "offline", "bg_volume": 0.25, "cookies": "none"}
+
+
+def settings_of(source):
+    s = {k: source.get(k, v) for k, v in SETTING_DEFAULTS.items()}
+    s["bg_volume"] = float(s["bg_volume"])
+    return s
+
+
 def find_existing(video_id, settings):
     """Video đã (hoặc đang) được lồng tiếng với cùng giọng đọc thì dùng lại."""
     if not video_id:
@@ -160,6 +181,53 @@ def find_existing(video_id, settings):
         if j.get("video_id") == video_id and j["voice"] == settings["voice"] and j["status"] != "error":
             return j
     return None
+
+
+def find_failed(video_id):
+    if not video_id:
+        return None
+    return next((j for j in jobs.values() if j.get("video_id") == video_id and j["status"] == "error"), None)
+
+
+def requeue(job, settings=None):
+    if settings:
+        job.update(settings)
+    job.update(status="queued", step=None, progress=0, logs=[])
+    job.pop("error", None)
+    save(job)
+    work_queue.put(job["id"])
+
+
+def migrate_playlist(pl):
+    """Bản cũ chỉ lưu job_ids nên video bị xoá mất luôn chỗ; chuyển sang danh sách vị trí."""
+    pl["entries"] = []
+    for jid in pl.pop("job_ids", []):
+        j = jobs.get(jid)
+        pl["entries"].append({"video_id": j and j.get("video_id"), "title": j and j["title"],
+                              "job_id": jid if j else None})
+    first = next((jobs[e["job_id"]] for e in pl["entries"] if e["job_id"]), {})
+    pl.setdefault("settings", settings_of(first))
+    save_playlist(pl)
+
+
+def attach_to_playlists(job):
+    """Đưa video vào đúng vị trí của nó trong playlist nếu vị trí đó đang trống (đã xoá) hoặc bị lỗi."""
+    vid = job.get("video_id")
+    if not vid:
+        return
+    for pl in list(playlists.values()):
+        for e in pl["entries"]:
+            if e["video_id"] != vid or e["job_id"] == job["id"]:
+                continue
+            old = jobs.get(e["job_id"])
+            if old and old["status"] != "error":
+                continue
+            if old:
+                remove_job(old["id"])  # bản lỗi được thay bằng bản mới
+            e["job_id"] = job["id"]
+            job["playlist_id"] = job.get("playlist_id") or pl["id"]
+            save_playlist(pl)
+            save(job)
 
 
 def new_job(url, settings, title=None, video_id=None, playlist_id=None):
@@ -207,49 +275,108 @@ def create_job():
     url = (data.get("url") or "").strip()
     if not url.startswith("http"):
         return jsonify(error="Link YouTube không hợp lệ"), 400
-    settings = {
-        "language": data.get("language", "auto"),
-        "voice": data.get("voice", "female"),
-        "model": data.get("model", "large-v3-turbo"),
-        "translator": data.get("translator", "offline"),
-        "bg_volume": float(data.get("bg_volume", 0.25)),
-        "cookies": data.get("cookies", "none"),
-    }
+    settings = settings_of(data)
 
     if data.get("playlist") and "list=" in url:
-        try:
-            title, entries = expand_playlist(url, settings["cookies"])
-        except Exception as e:
-            return jsonify(error=f"Không đọc được playlist: {e}"), 400
-        if not entries:
-            return jsonify(error="Playlist không có video nào xem được"), 400
-        pl = {"id": new_id(), "title": title, "url": url, "job_ids": [], "created": time.time()}
-        reused = 0
-        for e in entries:
-            existing = find_existing(e["id"], settings)
-            if existing:
-                reused += 1
-            job = existing or new_job(f"https://www.youtube.com/watch?v={e['id']}", settings,
-                                      e.get("title"), e["id"], pl["id"])
-            pl["job_ids"].append(job["id"])
-        playlists[pl["id"]] = pl
-        save_playlist(pl)
-        return jsonify(playlist=pl, count=len(entries), reused=reused)
+        return sync_playlist(url, settings)
 
-    existing = None if data.get("force") else find_existing(video_id_from_url(url), settings)
-    if existing:
-        return jsonify(job=light(existing), existing=True)
-    return jsonify(job=light(new_job(url, settings, video_id=video_id_from_url(url))))
+    vid = video_id_from_url(url)
+    if not data.get("force"):
+        existing = find_existing(vid, settings)
+        if existing:
+            attach_to_playlists(existing)
+            return jsonify(job=light(existing), existing=True)
+        failed = find_failed(vid)
+        if failed:  # thử lại bản lỗi ngay tại vị trí cũ của nó (kể cả trong playlist)
+            requeue(failed, settings)
+            return jsonify(job=light(failed))
+    job = new_job(url, settings, video_id=vid)
+    attach_to_playlists(job)
+    return jsonify(job=light(job))
+
+
+def sync_playlist(url, settings):
+    """Tạo playlist mới, hoặc cập nhật playlist đã có (cùng list=): thêm video mới,
+    lồng tiếng lại video đã xoá và thử lại video lỗi, giữ nguyên video đã xong."""
+    try:
+        title, found = expand_playlist(url, settings["cookies"])
+    except Exception as e:
+        return jsonify(error=f"Không đọc được playlist: {e}"), 400
+    if not found:
+        return jsonify(error="Playlist không có video nào xem được"), 400
+    lid = list_id_from_url(url)
+    pl = next((p for p in playlists.values() if lid and list_id_from_url(p["url"]) == lid), None)
+    is_new = pl is None
+    if is_new:
+        pl = {"id": new_id(), "url": url, "entries": [], "settings": settings, "created": time.time()}
+        playlists[pl["id"]] = pl
+    pl["title"] = title
+    old = {e["video_id"]: e for e in pl["entries"] if e["video_id"]}
+    entries, added = [], 0
+    for f in found:
+        slot = old.pop(f["id"], None) or {"video_id": f["id"], "job_id": None}
+        slot["title"] = f.get("title")
+        job = jobs.get(slot["job_id"])
+        if job and job["status"] == "error":
+            requeue(job)
+            added += 1
+        elif not job:
+            job = find_existing(f["id"], settings)
+            if not job:
+                job = new_job(f"https://www.youtube.com/watch?v={f['id']}", settings, f.get("title"), f["id"], pl["id"])
+                added += 1
+            slot["job_id"] = job["id"]
+        entries.append(slot)
+    # video đã bị gỡ khỏi playlist trên YouTube nhưng đã lồng tiếng thì vẫn giữ
+    entries += [e for e in old.values() if e["job_id"] in jobs]
+    pl["entries"] = entries
+    save_playlist(pl)
+    return jsonify(playlist=pl, count=len(found), added=added, updated=not is_new)
+
+
+@app.post("/api/playlists/<pl_id>/sync")
+def sync_existing_playlist(pl_id):
+    pl = playlists.get(pl_id) or abort(404)
+    return sync_playlist(pl["url"], settings_of(pl.get("settings", {})))
+
+
+@app.post("/api/playlists/<pl_id>/slots/<int:idx>")
+def redo_slot(pl_id, idx):
+    """Lồng tiếng lại một video đã bị xoá khỏi playlist, đặt vào đúng vị trí cũ."""
+    pl = playlists.get(pl_id) or abort(404)
+    if not 0 <= idx < len(pl["entries"]):
+        abort(404)
+    e = pl["entries"][idx]
+    if e["job_id"] in jobs:
+        return jsonify(error="Vị trí này đã có video"), 400
+    if not e["video_id"]:
+        return jsonify(error="Không rõ video ở vị trí này — hãy bấm 'Cập nhật từ YouTube'"), 400
+    settings = settings_of(pl.get("settings", {}))
+    job = find_existing(e["video_id"], settings) or new_job(
+        f"https://www.youtube.com/watch?v={e['video_id']}", settings, e["title"], e["video_id"], pl_id)
+    e["job_id"] = job["id"]
+    save_playlist(pl)
+    return jsonify(job=light(job))
+
+
+@app.post("/api/playlists/<pl_id>/retry-failed")
+def retry_failed(pl_id):
+    pl = playlists.get(pl_id) or abort(404)
+    failed = [jobs[e["job_id"]] for e in pl["entries"] if e["job_id"] in jobs and jobs[e["job_id"]]["status"] == "error"]
+    for job in failed:
+        requeue(job)
+    return jsonify(count=len(failed))
 
 
 @app.get("/api/library")
 def library():
     pls = []
     for pl in sorted(playlists.values(), key=lambda p: p["created"], reverse=True):
-        items = [jobs[i] for i in pl["job_ids"] if i in jobs]
-        pls.append({**pl, "total": len(items),
+        items = [jobs[e["job_id"]] for e in pl["entries"] if e["job_id"] in jobs]
+        pls.append({**pl, "job_ids": [j["id"] for j in items], "total": len(pl["entries"]),
                     "done": sum(j["status"] == "done" for j in items),
-                    "failed": sum(j["status"] == "error" for j in items)})
+                    "failed": sum(j["status"] == "error" for j in items),
+                    "missing": len(pl["entries"]) - len(items)})
     return jsonify(
         jobs=[light(j) for j in sorted(jobs.values(), key=lambda j: j["created"], reverse=True)],
         playlists=pls,
@@ -275,10 +402,7 @@ def retry_job(job_id):
     job = jobs.get(job_id) or abort(404)
     if job["status"] != "error":
         return jsonify(error="Chỉ thử lại được video bị lỗi"), 400
-    job.update(status="queued", step=None, progress=0, logs=[])
-    job.pop("error", None)
-    save(job)
-    work_queue.put(job_id)
+    requeue(job)
     return jsonify(light(job))
 
 
@@ -289,6 +413,12 @@ def remove_job(job_id):
     job["status"] = "deleted"  # để worker bỏ qua nếu còn trong hàng đợi
     shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
     jobs.pop(job_id)
+    # giữ lại vị trí trong playlist để sau này lồng tiếng lại đúng chỗ
+    for pl in playlists.values():
+        for e in pl["entries"]:
+            if e["job_id"] == job_id:
+                e["job_id"] = None
+                save_playlist(pl)
     return True
 
 
@@ -306,10 +436,10 @@ def delete_playlist(pl_id):
     pl = playlists.pop(pl_id, None) or abort(404)
     (PLAYLISTS_DIR / f"{pl_id}.json").unlink(missing_ok=True)
     # chỉ xoá video không thuộc playlist nào khác
-    others = {i for p in playlists.values() for i in p["job_ids"]}
-    for jid in pl["job_ids"]:
-        if jid not in others:
-            remove_job(jid)
+    others = {e["job_id"] for p in playlists.values() for e in p["entries"]}
+    for e in pl["entries"]:
+        if e["job_id"] and e["job_id"] not in others:
+            remove_job(e["job_id"])
     return jsonify(ok=True)
 
 

@@ -63,6 +63,19 @@ Trong lúc chạy:
 
 Khi xem video trong playlist, xem xong một video sẽ tự chuyển sang video tiếp theo.
 
+### Lỡ xoá video trong playlist?
+
+Video bị xoá vẫn giữ chỗ trong playlist (hiện là **Đã xoá**). Để lấy lại, làm một trong các cách:
+- bấm **Lồng tiếng lại** ngay ở ô video đó trên trang playlist;
+- dán lại link video đó ở trang chủ — video sẽ tự về đúng vị trí cũ trong playlist;
+- dán lại link playlist, hoặc bấm **Cập nhật từ YouTube** — thêm video mới, lồng tiếng lại video đã xoá và thử lại video lỗi (video đã xong được giữ nguyên, không tạo playlist trùng).
+
+Trang playlist cũng có nút **Thử lại video lỗi** để chạy lại tất cả video lỗi một lần.
+
+### Mất kết nối
+
+Nếu máy chủ khởi động lại hoặc mạng chập chờn, trang web hiện thông báo và tự kết nối lại; video đang xem bị lỗi/đứng hình sẽ tự tải lại đúng chỗ đang xem.
+
 ### Khi YouTube báo "Sign in to confirm you're not a bot"
 
 Đăng nhập YouTube trên Firefox, rồi ở ô **Đăng nhập YouTube qua** chọn **Firefox**. yt-dlp sẽ dùng phiên đăng nhập đó để tải.

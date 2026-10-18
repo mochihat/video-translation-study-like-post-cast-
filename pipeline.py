@@ -260,10 +260,16 @@ def translate_google(segments, log, progress):
 
 # ---------- 4. Lồng tiếng ----------
 async def _tts_one(text, voice, mp3_path, sem):
+    # câu chỉ có dấu câu/ký hiệu ("...", "♪") thì Edge TTS không đọc được -> bỏ qua
+    if not any(c.isalnum() for c in text):
+        return
     async with sem:
         for attempt in range(3):
             try:
                 await edge_tts.Communicate(text, voice).save(str(mp3_path))
+                return
+            except edge_tts.exceptions.NoAudioReceived:
+                mp3_path.unlink(missing_ok=True)  # câu này không đọc được, bỏ qua thay vì hỏng cả video
                 return
             except Exception:
                 if attempt == 2:
