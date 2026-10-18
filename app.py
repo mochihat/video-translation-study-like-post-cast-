@@ -134,7 +134,9 @@ def worker():
                 workdir = storage.tmp_dir(loc, job_id)
                 workdir.mkdir(parents=True, exist_ok=True)
                 run_pipeline(job, workdir, update)
-                finalize(job, workdir, loc)
+                # nếu vừa đổi nơi lưu trong lúc xử lý thì lưu thẳng vào nơi mới
+                new_loc = storage.current()
+                finalize(job, workdir, new_loc if new_loc != loc and storage.check(new_loc)[0] else loc)
                 job["status"] = "done"
                 break
             except Exception as e:
