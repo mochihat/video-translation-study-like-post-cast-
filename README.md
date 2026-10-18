@@ -58,6 +58,8 @@ Bấm **💾 Nơi lưu video** ở góc trên trang để chọn lưu video trê
 - Video trên ổ ngoài có nút **Giữ trên laptop** để chép một bản về máy, xem được khi không cắm ổ.
 - Ổ chưa cắm / đầy (dưới 3GB) / không ghi được → hàng đợi tự tạm dừng và báo trên trang; cắm ổ vào là tự chạy tiếp, video tự mở lại.
 
+**Rút ổ ra:** luôn bấm **⏏ Tháo ổ an toàn** ở đầu trang trước khi rút. Web dừng ghi vào ổ (video đang làm sẽ làm lại sau), tháo ổ rồi báo "có thể rút ổ ra". Rút thẳng khi đang ghi sẽ làm ổ NTFS bị đánh dấu lỗi ("dirty").
+
 **Ổ NTFS không mở được** ("volume is dirty"): ổ chưa được tháo an toàn hoặc Windows bật Fast Startup. Cắm vào Windows, chạy `chkdsk X: /f` rồi tháo an toàn; hoặc trên Linux: `sudo ntfsfix -d /dev/sdX1`.
 **Ổ ext4 báo không có quyền ghi**: `sudo chown $USER "/run/media/$USER/<tên ổ>"`.
 

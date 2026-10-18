@@ -81,7 +81,8 @@
 <body>
 <main>
   <div class="row"><h1><a href="#">🎬 Lồng tiếng Việt cho YouTube</a></h1>
-    <a href="#settings" class="muted" id="storageLink">💾 Nơi lưu video</a></div>
+    <span><a href="#settings" class="muted" id="storageLink">💾 Nơi lưu video</a>
+      <button class="ghost" id="ejectBtn" hidden title="Dừng ghi vào ổ và tháo ra an toàn">⏏ Tháo ổ an toàn</button></span></div>
   <p class="sub">Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
   <div id="conn" class="banner" hidden><span>⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
     <button class="ghost" onclick="location.reload()">Tải lại trang</button></div>
@@ -232,6 +233,16 @@ function renderLibrary() {
 
 function renderBanner() {
   if (LIB.storage) $("#storageLink").textContent = "💾 Lưu tại: " + LIB.storage;
+  const eb = $("#ejectBtn");
+  if (!eb.disabled) eb.hidden = !(LIB.storage_external && LIB.storage_mounted);
+  if (LIB.ejecting) {
+    $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--ok)"><span>✅</span>
+      <span style="flex:1"><b>Đã tháo ${esc(LIB.storage)} an toàn — giờ có thể rút ổ ra.</b>
+        <br><span class="muted">Hàng đợi tạm dừng${LIB.queued ? ` (còn ${LIB.queued} video)` : ""}; cắm ổ lại là tự chạy tiếp.</span></span>
+      <button class="ghost" id="resumeBtn">Dùng lại ổ ngay</button></div>`;
+    $("#resumeBtn").onclick = async () => { await api("/api/storage/resume", { method:"POST" }); await refreshLib(); };
+    return;
+  }
   const cur = LIB.jobs.find(j => j.id === LIB.current);
   $("#banner").innerHTML = cur ? `<div class="banner">
       <span>⏳</span>
@@ -488,6 +499,19 @@ async function renderSettings(full) {
   };
 }
 
+function bindEject() {
+  $("#ejectBtn").onclick = async () => {
+    const b = $("#ejectBtn");
+    if (!confirm(`Tháo ${LIB.storage} an toàn?\nVideo đang xử lý (nếu có) sẽ dừng lại và được làm lại khi bạn cắm ổ vào.`)) return;
+    b.disabled = true; b.textContent = "Đang dừng ghi và tháo ổ...";
+    try {
+      const r = await api("/api/storage/eject", { method:"POST" });
+      flash(r.message);
+      b.hidden = true;
+    } finally { b.disabled = false; b.textContent = "⏏ Tháo ổ an toàn"; await refreshLib(); }
+  };
+}
+
 // ---------- Điều hướng ----------
 async function refreshLib() {
   try { LIB = await api("/api/library"); } catch { return; }
@@ -513,6 +537,7 @@ window.addEventListener("hashchange", async () => { renderedKey = null; $("#view
 (async () => {
   // máy chủ chưa chạy (vừa bật máy) thì chờ và thử lại
   while (true) { try { STEPS = await api("/api/steps"); break; } catch { await sleep(3000); } }
+  bindEject();
   await refreshLib();
   route();
   setInterval(async () => {

@@ -88,9 +88,21 @@ def transient_reason(err):
     return None
 
 
-def download(url, workdir, log, browser=None):
+def download(url, workdir, log, browser=None, progress=None):
+    last = [-1.0]
+
+    def hook(d):
+        if progress and d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if total:
+                p = min(d.get("downloaded_bytes", 0) / total, 1.0)
+                if p - last[0] >= 0.01:  # chỉ báo khi tăng ≥1% để không ghi job.json liên tục
+                    last[0] = p
+                    progress(p)
+
     opts = {
         **cookie_opts(browser),
+        "progress_hooks": [hook],
         # ưu tiên H.264 để mọi trình duyệt/điện thoại đều phát được
         "format": "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=720][ext=mp4]+ba[ext=m4a]"
                   "/b[height<=720][ext=mp4]/bv*[height<=720]+ba/b",
@@ -369,7 +381,7 @@ def run_pipeline(job, workdir: Path, update):
             shutil.rmtree(p) if p.is_dir() else p.unlink()
 
     update(step="download", progress=0)
-    video, info = download(job["url"], workdir, log, job.get("cookies"))
+    video, info = download(job["url"], workdir, log, job.get("cookies"), lambda p: update(progress=p))
     update(title=info.get("title"), video_id=info.get("id"), duration=info.get("duration"))
 
     update(step="transcribe", progress=0)

@@ -20,6 +20,7 @@ MIN_FREE = 3 * 1024 ** 3  # còn dưới 3GB thì tạm dừng xử lý
 FS_OK = {"ext4", "ext3", "ext2", "ntfs", "ntfs3", "exfat", "vfat", "btrfs", "xfs", "f2fs"}
 
 _cache = {"t": 0, "parts": []}
+held = set()  # ổ đang được "tháo an toàn": không ghi, không tự mở lại cho tới khi rút ra / dùng lại
 _mount_fail = {}  # uuid -> (thời điểm, lý do) để không thử mount liên tục
 
 
@@ -97,6 +98,8 @@ def _mount_error_hint(part, msg):
 
 def mountpoint(uuid, auto_mount=True):
     """Trả về thư mục gốc của ổ; tự mount nếu ổ đã cắm mà chưa mở. Ném lỗi kèm lý do nếu không dùng được."""
+    if uuid in held:
+        raise RuntimeError("Ổ đang được tháo an toàn — có thể rút ổ ra")
     part = find(uuid)
     if not part:
         raise RuntimeError("Ổ lưu video chưa được cắm vào máy")
@@ -118,6 +121,31 @@ def mountpoint(uuid, auto_mount=True):
     if not part or not part["mountpoint"]:
         raise RuntimeError("Không mở được ổ lưu video")
     return Path(part["mountpoint"])
+
+
+def release_unplugged():
+    """Ổ đã tháo an toàn và đã rút ra -> lần cắm sau dùng lại bình thường."""
+    for uuid in list(held):
+        if not find(uuid, fresh=True):
+            held.discard(uuid)
+
+
+def eject(uuid):
+    """Unmount rồi tắt nguồn ổ để rút ra an toàn. Ném lỗi kèm lý do nếu ổ đang bận."""
+    part = find(uuid, fresh=True)
+    if not part:
+        return
+    if part["mountpoint"]:
+        r = subprocess.run(["udisksctl", "unmount", "-b", part["path"], "--no-user-interaction"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            if "busy" in r.stderr.lower():
+                raise RuntimeError("Ổ đang được một chương trình khác mở (ví dụ cửa sổ Files, Terminal đang ở trong ổ) — "
+                                   "hãy đóng chúng rồi thử lại")
+            raise RuntimeError(f"Không tháo được ổ: {r.stderr.strip()[-200:]}")
+    # tắt nguồn ổ (đèn ổ tắt); không được cũng không sao vì đã unmount
+    subprocess.run(["udisksctl", "power-off", "-b", part["path"], "--no-user-interaction"], capture_output=True)
+    _cache["t"] = 0
 
 
 def root(loc):

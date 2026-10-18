@@ -122,6 +122,12 @@ def worker():
                     job["logs"].append(f"[{time.strftime('%H:%M:%S')}] {log}")
                 save(job)
 
+        def report(**kw):
+            # đang tháo ổ an toàn -> dừng ghi ngay, video này sẽ làm lại khi cắm ổ
+            if current.get("loc") in storage.held:
+                raise RuntimeError("Dừng để tháo ổ an toàn")
+            update(**kw)
+
         job["status"] = "running"
         job.pop("error", None)
         attempt = 0
@@ -131,15 +137,20 @@ def worker():
             if job["status"] == "deleted":
                 break
             try:
+                current["loc"] = loc
                 workdir = storage.tmp_dir(loc, job_id)
                 workdir.mkdir(parents=True, exist_ok=True)
-                run_pipeline(job, workdir, update)
+                run_pipeline(job, workdir, report)
                 # nếu vừa đổi nơi lưu trong lúc xử lý thì lưu thẳng vào nơi mới
                 new_loc = storage.current()
                 finalize(job, workdir, new_loc if new_loc != loc and storage.check(new_loc)[0] else loc)
                 job["status"] = "done"
                 break
             except Exception as e:
+                current["loc"] = None
+                if loc in storage.held:
+                    update(log="Tạm dừng để tháo ổ an toàn — video này sẽ làm lại khi cắm ổ vào")
+                    continue
                 traceback.print_exc()
                 if not storage.check(loc)[0]:
                     # ổ bị rút ra / đầy giữa chừng: chờ ổ sẵn sàng rồi làm lại video này
@@ -166,6 +177,7 @@ def worker():
                 break
         job["finished"] = time.time()
         current["id"] = None
+        current["loc"] = None
         save(job)
         if not work_queue.empty():
             time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
@@ -173,15 +185,18 @@ def worker():
 
 def wait_for_storage(job):
     """Chờ tới khi nơi lưu video đang chọn dùng được (đã cắm, ghi được, còn chỗ)."""
+    current["loc"] = None
     while True:
+        storage.release_unplugged()
         loc = storage.current()
         ok, reason = storage.check(loc)
         if ok or job["status"] == "deleted":
             current["paused_until"] = None
             return loc
-        current["paused_until"] = time.time() + 30
+        wait = 5 if loc in storage.held else 30
+        current["paused_until"] = time.time() + wait
         current["pause_reason"] = f"{storage.describe(loc)}: {reason}"
-        time.sleep(30)
+        time.sleep(wait)
 
 
 def finalize(job, workdir, loc):
@@ -417,6 +432,14 @@ def retry_failed(pl_id):
     return jsonify(count=len(failed))
 
 
+def storage_mounted():
+    loc = storage.current()
+    if loc == "local" or loc in storage.held:
+        return False
+    part = storage.find(loc)
+    return bool(part and part["mountpoint"])
+
+
 @app.get("/api/library")
 def library():
     pls = []
@@ -429,6 +452,9 @@ def library():
     return jsonify(
         jobs=[with_video_state(j) for j in sorted(jobs.values(), key=lambda j: j["created"], reverse=True)],
         storage=storage.describe(storage.current()),
+        storage_external=storage.current() != "local",
+        storage_mounted=storage_mounted(),
+        ejecting=storage.current() in storage.held,
         playlists=pls,
         current=current["id"],
         paused_until=current["paused_until"],
@@ -576,6 +602,35 @@ def move_videos(target):
         traceback.print_exc()
         move_state["error"] = str(e)
     move_state.update(running=False, title=None)
+
+
+@app.post("/api/storage/eject")
+def eject_storage():
+    """Tháo ổ an toàn: dừng ghi (video đang làm sẽ làm lại sau), unmount, tắt nguồn ổ."""
+    loc = storage.current()
+    if loc == "local":
+        return jsonify(error="Đang lưu trên laptop, không có ổ ngoài nào để tháo"), 400
+    if move_state["running"]:
+        return jsonify(error="Đang chuyển video sang ổ — chờ chuyển xong rồi hãy tháo"), 400
+    storage.held.add(loc)
+    deadline = time.time() + 180
+    while current.get("loc") == loc and time.time() < deadline:  # chờ worker dừng ghi
+        time.sleep(1)
+    if current.get("loc") == loc:
+        storage.held.discard(loc)
+        return jsonify(error="Video đang xử lý chưa dừng ghi được (đang ghép video) — thử lại sau 1–2 phút"), 400
+    try:
+        storage.eject(loc)
+    except RuntimeError as e:
+        storage.held.discard(loc)
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True, message=f"Đã tháo {storage.describe(loc)} an toàn — giờ có thể rút ổ ra.")
+
+
+@app.post("/api/storage/resume")
+def resume_storage():
+    storage.held.discard(storage.current())
+    return jsonify(ok=True)
 
 
 @app.get("/api/storage")
