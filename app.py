@@ -338,7 +338,9 @@ def light(job):
 
 @app.get("/")
 def index():
-    return send_from_directory(BASE / "static", "index.html")
+    resp = send_from_directory(BASE / "static", "index.html")
+    resp.headers["Cache-Control"] = "no-cache"  # luôn lấy giao diện mới nhất sau khi cập nhật
+    return resp
 
 
 @app.get("/api/steps")
@@ -445,12 +447,21 @@ def retry_failed(pl_id):
     return jsonify(count=len(failed))
 
 
-def storage_mounted():
-    loc = storage.current()
-    if loc == "local" or loc in storage.held:
-        return False
-    part = storage.find(loc)
-    return bool(part and part["mountpoint"])
+def used_drives():
+    """Các ổ ngoài web đang dùng: nơi lưu hiện tại và các ổ đang chứa video."""
+    locs = {storage.current()} | {j.get("video_at", "local") for j in jobs.values()}
+    locs.discard("local")
+    return locs
+
+
+def ejectable():
+    """Ổ ngoài web đang dùng mà còn đang mở -> cần 'Tháo ổ an toàn' trước khi rút."""
+    out = []
+    for loc in used_drives():
+        part = storage.find(loc)
+        if loc not in storage.held and part and part["mountpoint"]:
+            out.append({"id": loc, "name": storage.describe(loc)})
+    return out
 
 
 @app.get("/api/library")
@@ -465,9 +476,8 @@ def library():
     return jsonify(
         jobs=[with_video_state(j) for j in sorted(jobs.values(), key=lambda j: j["created"], reverse=True)],
         storage=storage.describe(storage.current()),
-        storage_external=storage.current() != "local",
-        storage_mounted=storage_mounted(),
-        ejecting=storage.current() in storage.held,
+        ejectable=ejectable(),
+        ejecting=[{"id": u, "name": storage.describe(u)} for u in storage.held],
         playlists=pls,
         current=current["id"],
         paused_until=current["paused_until"],
@@ -620,9 +630,10 @@ def move_videos(target):
 @app.post("/api/storage/eject")
 def eject_storage():
     """Tháo ổ an toàn: dừng ghi (video đang làm sẽ làm lại sau), unmount, tắt nguồn ổ."""
-    loc = storage.current()
-    if loc == "local":
-        return jsonify(error="Đang lưu trên laptop, không có ổ ngoài nào để tháo"), 400
+    loc = (request.get_json(silent=True) or {}).get("location") or storage.current()
+    if loc == "local" or loc not in used_drives():
+        return jsonify(error="Không có ổ ngoài nào để tháo"), 400
+    name = storage.describe(loc)
     if move_state["running"]:
         return jsonify(error="Đang chuyển video sang ổ — chờ chuyển xong rồi hãy tháo"), 400
     storage.held.add(loc)
@@ -637,12 +648,16 @@ def eject_storage():
     except RuntimeError as e:
         storage.held.discard(loc)
         return jsonify(error=str(e)), 400
-    return jsonify(ok=True, message=f"Đã tháo {storage.describe(loc)} an toàn — giờ có thể rút ổ ra.")
+    return jsonify(ok=True, message=f"Đã tháo {name} an toàn — giờ có thể rút ổ ra.")
 
 
 @app.post("/api/storage/resume")
 def resume_storage():
-    storage.held.discard(storage.current())
+    loc = (request.get_json(silent=True) or {}).get("location")
+    if loc:
+        storage.held.discard(loc)
+    else:
+        storage.held.clear()
     return jsonify(ok=True)
 
 

@@ -233,25 +233,28 @@ function renderLibrary() {
 
 function renderBanner() {
   if (LIB.storage) $("#storageLink").textContent = "💾 Lưu tại: " + LIB.storage;
-  const eb = $("#ejectBtn");
-  if (!eb.disabled) eb.hidden = !(LIB.storage_external && LIB.storage_mounted);
-  if (LIB.ejecting) {
-    $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--ok)"><span>✅</span>
-      <span style="flex:1"><b>Đã tháo ${esc(LIB.storage)} an toàn — giờ có thể rút ổ ra.</b>
-        <br><span class="muted">Hàng đợi tạm dừng${LIB.queued ? ` (còn ${LIB.queued} video)` : ""}; cắm ổ lại là tự chạy tiếp.</span></span>
-      <button class="ghost" id="resumeBtn">Dùng lại ổ ngay</button></div>`;
-    $("#resumeBtn").onclick = async () => { await api("/api/storage/resume", { method:"POST" }); await refreshLib(); };
-    return;
+  const eb = $("#ejectBtn"), drive = (LIB.ejectable || [])[0];
+  if (!eb.disabled) {
+    eb.hidden = !drive;
+    if (drive) { eb.textContent = `⏏ Tháo ${drive.name} an toàn`; eb.dataset.loc = drive.id; }
   }
+  const ejected = (LIB.ejecting || []).map(d => `<div class="banner" style="border-left-color:var(--ok)"><span>✅</span>
+      <span style="flex:1"><b>Đã tháo ${esc(d.name)} an toàn — giờ có thể rút ổ ra.</b>
+        <br><span class="muted">Cắm ổ lại là dùng tiếp bình thường.</span></span>
+      <button class="ghost resume-drive" data-loc="${esc(d.id)}">Dùng lại ổ ngay</button></div>`).join("");
   const cur = LIB.jobs.find(j => j.id === LIB.current);
-  $("#banner").innerHTML = cur ? `<div class="banner">
+  $("#banner").innerHTML = ejected + (cur ? `<div class="banner">
       <span>⏳</span>
       <span style="flex:1">Đang xử lý: <a href="#v=${cur.id}">${esc(cur.title)}</a>
       ${LIB.queued ? ` — còn <b>${LIB.queued}</b> video chờ` : ""}
       ${LIB.paused_until ? `<br><span class="err">${esc(LIB.pause_reason)} — tự thử lại lúc ${new Date(LIB.paused_until * 1000).toLocaleTimeString("vi-VN")}.
         ${LIB.pause_reason?.includes("YouTube") ? 'Nếu bị chặn lâu, hãy đăng nhập YouTube trên Firefox rồi chọn "Đăng nhập YouTube qua: Firefox".' : ""}</span>` : ""}
       <br><span class="muted">Máy sẽ không tự ngủ cho tới khi xong. Có thể đóng trình duyệt, nhưng đừng tắt máy.</span></span>
-    </div>` : "";
+    </div>` : "");
+  document.querySelectorAll(".resume-drive").forEach(b => b.onclick = async () => {
+    await api("/api/storage/resume", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ location: b.dataset.loc }) });
+    await refreshLib();
+  });
 }
 
 // ---------- Trang playlist ----------
@@ -501,11 +504,11 @@ async function renderSettings(full) {
 
 function bindEject() {
   $("#ejectBtn").onclick = async () => {
-    const b = $("#ejectBtn");
-    if (!confirm(`Tháo ${LIB.storage} an toàn?\nVideo đang xử lý (nếu có) sẽ dừng lại và được làm lại khi bạn cắm ổ vào.`)) return;
+    const b = $("#ejectBtn"), loc = b.dataset.loc;
+    if (!confirm(`${b.textContent.replace("⏏ ", "")}?\nNếu đang xử lý video trên ổ này, video đó sẽ dừng lại và được làm lại khi bạn cắm ổ vào.\nNhớ dừng các video đang phát từ ổ này.`)) return;
     b.disabled = true; b.textContent = "Đang dừng ghi và tháo ổ...";
     try {
-      const r = await api("/api/storage/eject", { method:"POST" });
+      const r = await api("/api/storage/eject", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ location: loc }) });
       flash(r.message);
       b.hidden = true;
     } finally { b.disabled = false; b.textContent = "⏏ Tháo ổ an toàn"; await refreshLib(); }
