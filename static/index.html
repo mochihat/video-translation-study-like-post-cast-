@@ -10,6 +10,7 @@
     :root { --bg:#14161b; --card:#1d2027; --text:#e8eaef; --muted:#9aa1b0; --line:#2d313b; --accent:#ff6b5e; --ok:#5bd38a; --warn:#f0b450; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }  /* để .banner / .row (display:flex) không đè thuộc tính hidden */
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
   main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 60px; }
   a { color:var(--accent); text-decoration:none; }
@@ -23,7 +24,7 @@
   label.check { display:flex; gap:8px; align-items:center; color:var(--text); font-size:15px; margin-top:12px; }
   input, select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
   input[type=range] { padding:0; }
-  input[type=checkbox] { width:auto; }
+  input[type=checkbox], input[type=radio] { width:auto; flex:none; }
   .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-top:12px; }
   button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:11px 20px; font:inherit; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
