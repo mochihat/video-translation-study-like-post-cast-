@@ -11,8 +11,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 
+import remote
 import storage
 from pipeline import STEPS, cookie_opts, run_pipeline, transient_reason
 
@@ -334,6 +335,65 @@ def expand_playlist(url, browser):
 
 def light(job):
     return {k: v for k, v in job.items() if k != "logs"}
+
+
+LOGIN_PAGE = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Nhập mã PIN</title>
+<style>
+ :root{--bg:#f5f6f8;--card:#fff;--text:#1d2330;--muted:#6b7385;--line:#e3e6ec;--accent:#d93025}
+ @media (prefers-color-scheme: dark){:root{--bg:#14161b;--card:#1d2027;--text:#e8eaef;--muted:#9aa1b0;--line:#2d313b;--accent:#ff6b5e}}
+ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+ form{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;width:100%;max-width:340px;text-align:center}
+ input{width:100%;box-sizing:border-box;font:inherit;font-size:28px;letter-spacing:8px;text-align:center;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+ button{margin-top:14px;width:100%;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px;font:inherit;font-weight:600}
+ p{color:var(--muted);font-size:14px} .err{color:var(--accent)}
+</style></head><body><form method="post" action="/login">
+<h2 style="margin-top:0">🎬 Lồng tiếng Việt</h2>
+<p>Nhập mã PIN hiện trên laptop<br>(💾 Nơi lưu video → 📱 Xem trên điện thoại)</p>
+<input name="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus required>
+%ERROR%<button>Vào xem</button></form></body></html>"""
+
+
+@app.before_request
+def guard():
+    """Laptop vào thẳng; máy khác phải bật tính năng, ở mạng nội bộ và nhập đúng PIN."""
+    addr = request.remote_addr or ""
+    if remote.is_local(addr):
+        return None
+    if not remote.settings()["enabled"] or not remote.is_private(addr):
+        return ("Tính năng xem từ điện thoại / máy khác đang tắt. "
+                "Bật trong trang 💾 Nơi lưu video trên laptop."), 403
+    if request.cookies.get(remote.COOKIE) == remote.token():
+        return None
+    pin = request.form.get("pin") if request.method == "POST" and request.path == "/login" else request.args.get("pin")
+    if pin is not None:
+        if remote.check_pin(addr, pin):
+            resp = redirect("/")
+            resp.set_cookie(remote.COOKIE, remote.token(), max_age=365 * 86400, httponly=True, samesite="Lax")
+            return resp
+        msg = ("Nhập sai quá nhiều lần — thử lại sau 15 phút." if remote.locked(addr) else "Mã PIN không đúng.")
+        return LOGIN_PAGE.replace("%ERROR%", f'<p class="err">{msg}</p>'), 401
+    if request.path.startswith(("/api/", "/files/")):
+        return jsonify(error="Cần nhập mã PIN"), 401
+    return LOGIN_PAGE.replace("%ERROR%", ""), 401
+
+
+@app.get("/api/remote")
+def get_remote():
+    r = remote.settings()
+    urls = [f"http://{ip}:{remote.PORT}" for ip in remote.lan_ips()]
+    return jsonify(enabled=r["enabled"], pin=r["pin"], wifi=remote.wifi_name(),
+                   urls=[{"url": u, "qr": remote.qr_svg(f"{u}/?pin={r['pin']}")} for u in urls])
+
+
+@app.post("/api/remote")
+def set_remote():
+    data = request.get_json(force=True)
+    if "enabled" in data:
+        remote.set_enabled(data["enabled"])
+    if data.get("new_pin"):
+        remote.new_pin()
+    return get_remote()
 
 
 @app.get("/")
@@ -686,4 +746,5 @@ if __name__ == "__main__":
     load_existing()
     threading.Thread(target=worker, daemon=True).start()
     print("\n  Mở trình duyệt tại: http://localhost:5000\n", flush=True)
-    app.run(host="127.0.0.1", port=5000, threaded=True)
+    # nghe trên mọi địa chỉ để điện thoại cùng Wi-Fi vào được; guard() chặn khi chưa bật / sai PIN
+    app.run(host="0.0.0.0", port=remote.PORT, threaded=True)

@@ -31,6 +31,10 @@ def load_config():
         return {}
 
 
+def save_config(cfg):
+    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+
+
 def current():
     return load_config().get("location", "local")
 

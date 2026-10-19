@@ -75,6 +75,7 @@
   .opt.off { opacity:.7; }
   .opt input { margin-top:4px; }
   .opt .bar { margin-top:6px; max-width:320px; }
+  #remoteCard svg { width:100%; height:auto; display:block; }
   .noplay { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; padding:16px; border-radius:8px; background:var(--bg); border:1px dashed var(--line); }
 </style>
 </head>
@@ -485,7 +486,9 @@ async function renderSettings(full) {
       <div style="margin-top:14px"><button id="saveLoc">Lưu lựa chọn</button> <button class="ghost" id="rescan">Quét lại ổ</button>
         <span id="locMsg" class="msg"></span></div>
       <div id="moveState" style="margin-top:12px">${moveHtml}</div>
-    </div>`;
+    </div>
+    <div class="card" id="remoteCard"></div>`;
+  renderRemote();
   document.querySelectorAll("input[name=loc]").forEach(r => r.onchange = () => {
     document.querySelectorAll(".opt").forEach(o => o.classList.toggle("sel", o.contains(r) && r.checked));
   });
@@ -499,6 +502,36 @@ async function renderSettings(full) {
       await renderSettings(true);
       flash("Đã lưu. Video mới sẽ được lưu ở nơi bạn chọn.");
     } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+  };
+}
+
+async function renderRemote(data) {
+  const el = $("#remoteCard"); if (!el) return;
+  let r = data;
+  if (!r) { try { r = await api("/api/remote"); } catch { return; } }
+  const post = async body => renderRemote(await api("/api/remote", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) }));
+  el.innerHTML = `<div class="row"><h2 style="margin:0">📱 Xem trên điện thoại</h2>
+      <button ${r.enabled ? 'class="ghost"' : ""} id="remoteToggle">${r.enabled ? "Tắt" : "Bật"}</button></div>
+    <p class="muted">Xem video trên điện thoại hoặc máy khác <b>dùng cùng Wi-Fi</b>${r.wifi ? ` (“${esc(r.wifi)}”)` : ""} với laptop.
+      Laptop phải đang bật, không ngủ và cắm ổ chứa video.</p>
+    ${!r.enabled ? "" : r.urls.length ? `
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+        <div style="background:#fff;border-radius:10px;padding:6px;width:190px;line-height:0">${r.urls[0].qr}</div>
+        <div style="flex:1;min-width:220px">
+          <p style="margin:0 0 6px"><b>Cách 1:</b> mở Camera trên điện thoại, quét mã QR bên cạnh.</p>
+          <p style="margin:0 0 6px"><b>Cách 2:</b> mở trình duyệt điện thoại, gõ
+            ${r.urls.map(u => `<br><code style="font-size:17px">${esc(u.url)}</code>`).join("")}
+            <br>rồi nhập mã PIN: <b style="font-size:22px;letter-spacing:4px">${esc(r.pin)}</b></p>
+          <p class="muted" style="margin:0">Mỗi điện thoại chỉ cần nhập PIN một lần.
+            <button class="ghost" id="newPin">Đổi mã PIN</button></p>
+        </div>
+      </div>
+      <p class="muted" style="margin-bottom:0">Không vào được? Wi-Fi trường học/công cộng thường chặn các thiết bị kết nối với nhau.
+        Khi đó hãy bật <b>điểm phát Wi-Fi</b> trên điện thoại, cho laptop kết nối vào, rồi mở lại trang này để lấy địa chỉ mới.</p>`
+    : `<p class="err">Laptop chưa kết nối Wi-Fi / mạng nào.</p>`}`;
+  $("#remoteToggle").onclick = () => post({ enabled: !r.enabled });
+  if ($("#newPin")) $("#newPin").onclick = () => {
+    if (confirm("Đổi mã PIN? Các điện thoại đã đăng nhập sẽ phải nhập mã mới.")) post({ new_pin: true });
   };
 }
 

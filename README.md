@@ -63,6 +63,14 @@ Bấm **💾 Nơi lưu video** ở góc trên trang để chọn lưu video trê
 **Ổ NTFS không mở được** ("volume is dirty"): ổ chưa được tháo an toàn hoặc Windows bật Fast Startup. Cắm vào Windows, chạy `chkdsk X: /f` rồi tháo an toàn; hoặc trên Linux: `sudo ntfsfix -d /dev/sdX1`.
 **Ổ ext4 báo không có quyền ghi**: `sudo chown $USER "/run/media/$USER/<tên ổ>"`.
 
+## Xem trên điện thoại
+
+Vào **💾 Nơi lưu video → 📱 Xem trên điện thoại → Bật**. Điện thoại dùng cùng Wi-Fi với laptop quét mã QR (hoặc gõ địa chỉ `http://<IP laptop>:5000` và nhập mã PIN 6 số) — mỗi điện thoại chỉ nhập PIN một lần.
+
+- Laptop vào thẳng không cần PIN; máy khác bắt buộc PIN, chỉ nhận kết nối trong mạng nội bộ, sai 10 lần bị khoá 15 phút. **Đổi mã PIN** để đăng xuất mọi điện thoại.
+- Wi-Fi trường học / công cộng thường chặn các thiết bị nói chuyện với nhau: khi đó bật điểm phát Wi-Fi trên điện thoại cho laptop kết nối vào.
+- Laptop phải đang bật, không ngủ, và cắm ổ chứa video.
+
 ## Dịch cả playlist (treo máy)
 
 1. Dán link playlist (`https://www.youtube.com/playlist?list=...` hoặc link video có `&list=...`), để tick **Dịch toàn bộ playlist**.
