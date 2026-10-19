@@ -6,3 +6,4 @@ server.log
 playlists/
 config.json
 tmp/
+config.json.tmp

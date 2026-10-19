@@ -4,89 +4,217 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lồng tiếng Việt cho YouTube</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7385; --line:#e3e6ec; --accent:#d93025; --ok:#188038; --warn:#b06000; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#14161b; --card:#1d2027; --text:#e8eaef; --muted:#9aa1b0; --line:#2d313b; --accent:#ff6b5e; --ok:#5bd38a; --warn:#f0b450; }
+  /* Phong cách: xanh dương học thuật đậm, nền sáng thoáng, nút bo tròn kiểu viên thuốc */
+  :root {
+    --brand:#0033a0; --brand-600:#00287d; --brand-50:#eef3fc; --brand-100:#dbe5f8; --on-brand:#fff;
+    --bg:#f4f6fa; --card:#fff; --text:#141a26; --muted:#6b7280; --line:#e4e8ef;
+    --accent:#0033a0; --ok:#15803d; --ok-50:#e8f5ec; --warn:#b45309; --warn-50:#fdf3e6; --danger:#c8102e; --danger-50:#fdecee;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+    --shadow-lg:0 12px 28px -8px rgba(0,35,110,.22);
+    --radius:16px;
   }
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }  /* để .banner / .row (display:flex) không đè thuộc tính hidden */
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
-  main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 60px; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --brand:#4f7dff; --brand-600:#3d6bf0; --brand-50:#16223d; --brand-100:#1d2c4f; --on-brand:#fff;
+      --bg:#0b1120; --card:#121a2c; --text:#e7ecf5; --muted:#94a0b8; --line:#222e47;
+      --accent:#7d9dff; --ok:#4ade80; --ok-50:#10291b; --warn:#f5b456; --warn-50:#2d2111; --danger:#ff6b7f; --danger-50:#341720;
+      --shadow:0 1px 2px rgba(0,0,0,.4); --shadow-lg:0 12px 28px -8px rgba(0,0,0,.6);
+    }
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }  /* để .banner / .row (display:flex) không đè thuộc tính hidden */
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.6 "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
   a { color:var(--accent); text-decoration:none; }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  h1 a { color:inherit; }
-  h2 { font-size:17px; margin:0 0 10px; }
-  .sub { color: var(--muted); margin: 0 0 20px; }
-  .muted { color: var(--muted); font-size:13px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:16px; }
-  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
-  label.check { display:flex; gap:8px; align-items:center; color:var(--text); font-size:15px; margin-top:12px; }
-  input, select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
-  input[type=range] { padding:0; }
-  input[type=checkbox], input[type=radio] { width:auto; flex:none; }
-  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-top:12px; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:11px 20px; font:inherit; font-weight:600; cursor:pointer; }
+  a:hover { text-decoration:underline; }
+  h1, h2, h3 { letter-spacing:-.01em; }
+  h2 { font-size:18px; margin:0 0 12px; font-weight:700; }
+  code { font-family:ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* ---------- Thanh trên cùng ---------- */
+  .appbar { background:var(--brand); color:var(--on-brand); position:sticky; top:0; z-index:20;
+    box-shadow:0 2px 12px rgba(0,25,80,.25); }
+  @media (prefers-color-scheme: dark) { .appbar { background:#0a1f5c; } }
+  .appbar .wrap { max-width:1160px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .brand { display:flex; align-items:center; gap:12px; color:#fff; margin-right:auto; }
+  .brand:hover { text-decoration:none; }
+  .brand .logo { width:38px; height:38px; border-radius:11px; background:#fff; color:#0033a0; display:grid; place-items:center; font-size:16px; flex:none; }
+  .brand b { display:block; font-size:17px; line-height:1.2; }
+  .brand small { display:block; font-size:12px; opacity:.8; }
+  .appbar nav { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .chip-link { color:#fff; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); border-radius:999px;
+    padding:6px 14px; font-size:13px; font-weight:500; white-space:nowrap; }
+  .chip-link:hover { background:rgba(255,255,255,.2); text-decoration:none; }
+  .appbar button.ghost { color:#fff; border-color:rgba(255,255,255,.35); background:transparent; }
+  .appbar button.ghost:hover { background:rgba(255,255,255,.14); }
+
+  main { max-width:1160px; margin:0 auto; padding:24px 16px 72px; }
+
+  /* ---------- Khối nội dung ---------- */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:22px; margin-bottom:20px; box-shadow:var(--shadow); }
+  .section-head { display:flex; align-items:baseline; gap:10px; margin:28px 0 14px; }
+  .section-head h2 { margin:0; padding-left:12px; border-left:4px solid var(--brand); line-height:1.2; }
+  .section-head .count { color:var(--muted); font-size:13px; }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .muted { color:var(--muted); font-size:13px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .err { color:var(--danger); }
+  .msg { margin-left:12px; font-size:14px; }
+  .back { display:inline-flex; align-items:center; gap:6px; margin-bottom:14px; font-weight:500; font-size:14px; }
+
+  /* ---------- Ô nhập, nút ---------- */
+  label { display:block; font-size:13px; font-weight:500; color:var(--muted); margin-bottom:6px; }
+  label.check { display:flex; gap:8px; align-items:center; color:var(--text); font-size:14px; margin-top:12px; font-weight:400; }
+  input, select { width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--text); font:inherit;
+    transition:border-color .15s, box-shadow .15s; }
+  input:focus, select:focus { outline:none; border-color:var(--brand); box-shadow:0 0 0 4px var(--brand-100); }
+  input[type=range] { padding:0; accent-color:var(--brand); border:0; box-shadow:none; }
+  input[type=checkbox], input[type=radio] { width:auto; flex:none; accent-color:var(--brand); }
+  button { background:var(--brand); color:#fff; border:0; border-radius:999px; padding:11px 22px; font:inherit; font-weight:600; cursor:pointer;
+    transition:background .15s, transform .05s, box-shadow .15s; }
+  button:hover { background:var(--brand-600); }
+  button:active { transform:translateY(1px); }
   button:disabled { opacity:.5; cursor:default; }
-  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); padding:6px 12px; font-weight:400; }
-  .row { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
-  .msg { margin-left:12px; }
-  .err { color:var(--accent); }
-  .banner { display:flex; gap:10px; align-items:center; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--warn); border-radius:8px; padding:10px 14px; margin-bottom:16px; }
-  .lib { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:14px; }
-  .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer; color:var(--text); display:block; }
-  .tile:hover { border-color: var(--muted); }
-  .cover { aspect-ratio:16/9; background:var(--line) center/cover no-repeat; position:relative; }
-  .cover .dur { position:absolute; right:6px; bottom:6px; background:#000c; color:#fff; font-size:12px; padding:1px 6px; border-radius:4px; }
-  .cover .stack { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:30px; background:#0005; color:#fff; }
-  .tile .info { padding:8px 10px 10px; }
-  .tile .t { font-size:14px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .badge { font-size:12px; padding:1px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
-  .badge.done { color:var(--ok); border-color:var(--ok); }
-  .badge.error { color:var(--accent); border-color:var(--accent); }
-  .badge.running { color:var(--warn); border-color:var(--warn); }
-  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
-  .bar > div { height:100%; background:var(--accent); transition: width .3s; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); padding:7px 14px; font-weight:500; font-size:14px; }
+  button.ghost:hover { background:var(--brand-50); border-color:var(--brand-100); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:14px; }
+
+  /* ---------- Khối dán link ở trang chủ ---------- */
+  .hero { background:linear-gradient(135deg, var(--brand) 0%, #1a4fc4 60%, #2f6bdf 100%); color:#fff; border:0; padding:28px; position:relative; overflow:hidden; }
+  @media (prefers-color-scheme: dark) { .hero { background:linear-gradient(135deg, #0a1f5c 0%, #13348f 100%); } }
+  .hero::after { content:""; position:absolute; right:-80px; top:-80px; width:260px; height:260px; border-radius:50%;
+    background:radial-gradient(circle, rgba(255,255,255,.16), transparent 70%); pointer-events:none; }
+  .hero h2 { font-size:24px; margin:0 0 4px; }
+  .hero p { margin:0 0 18px; opacity:.85; }
+  .hero .bar-input { display:flex; gap:8px; background:#fff; border-radius:999px; padding:6px; box-shadow:var(--shadow-lg); }
+  .hero .bar-input input { border:0; background:transparent; color:#141a26; border-radius:999px; box-shadow:none; padding:10px 14px; }
+  .hero .bar-input button { flex:none; padding:10px 22px; }
+  .hero label.check { color:#fff; }
+  .hero .msg { color:#fff; margin:10px 0 0; display:block; }
+  .hero .msg.err { color:#ffd3d9; }
+  details.adv { margin-top:14px; }
+  details.adv summary { cursor:pointer; font-size:14px; font-weight:500; opacity:.9; list-style:none; display:inline-flex; gap:6px; align-items:center; }
+  details.adv summary::-webkit-details-marker { display:none; }
+  details.adv summary::before { content:"⚙"; }
+  details.adv[open] summary { margin-bottom:14px; }
+  details.adv .grid { background:var(--card); color:var(--text); border-radius:14px; padding:16px; }
+
+  /* ---------- Thư viện ---------- */
+  .lib { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:18px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; cursor:pointer; color:var(--text); display:block;
+    box-shadow:var(--shadow); transition:transform .15s, box-shadow .15s; }
+  .tile:hover { transform:translateY(-3px); box-shadow:var(--shadow-lg); text-decoration:none; }
+  .cover { aspect-ratio:16/9; background:var(--brand-50) center/cover no-repeat; position:relative; }
+  .tile .cover::after { content:""; position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,.45), transparent 45%); }
+  .cover .dur { position:absolute; right:8px; bottom:8px; z-index:1; background:rgba(0,0,0,.72); color:#fff; font-size:12px; font-weight:500; padding:2px 7px; border-radius:6px; }
+  .cover .stack { position:absolute; inset:auto 0 0 auto; z-index:1; margin:8px; background:rgba(0,51,160,.9); color:#fff; font-size:13px; font-weight:600;
+    padding:4px 10px; border-radius:999px; }
+  .cover .bar { position:absolute; left:0; right:0; bottom:0; z-index:2; border-radius:0; height:4px; background:rgba(255,255,255,.3); }
+  .tile .info { padding:12px 14px 14px; }
+  .tile .t { font-size:14px; font-weight:600; line-height:1.45; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:2.9em; }
+  .tile .meta { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:10px; }
+  .empty { text-align:center; padding:40px 16px; color:var(--muted); border:2px dashed var(--line); border-radius:var(--radius); }
+
+  /* ---------- Nhãn trạng thái, thanh tiến độ ---------- */
+  .badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px;
+    background:var(--bg); color:var(--muted); white-space:nowrap; }
+  .badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+  .badge.done { color:var(--ok); background:var(--ok-50); }
+  .badge.error { color:var(--danger); background:var(--danger-50); }
+  .badge.running { color:var(--warn); background:var(--warn-50); }
+  .badge.queued { color:var(--brand); background:var(--brand-50); }
+  @media (prefers-color-scheme: dark) { .badge.queued { color:var(--accent); } }
+  .bar { height:6px; background:var(--line); border-radius:999px; overflow:hidden; }
+  .bar > div { height:100%; background:var(--brand); border-radius:inherit; transition:width .4s; }
   .bar.ok > div { background:var(--ok); }
-  .steps { display:flex; flex-direction:column; gap:6px; margin:12px 0; }
-  .step { display:flex; align-items:center; gap:10px; color:var(--muted); }
+
+  /* ---------- Thông báo ---------- */
+  .banner { display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:12px 16px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .banner .ico { width:36px; height:36px; border-radius:10px; display:grid; place-items:center; background:var(--brand-50); flex:none; font-size:17px; }
+  .banner.ok .ico { background:var(--ok-50); }
+  .banner.warn .ico { background:var(--warn-50); }
+  .banner .bar { margin-top:8px; max-width:420px; }
+  .flash { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:50; background:#141a26; color:#fff; border-radius:999px;
+    padding:12px 20px; box-shadow:var(--shadow-lg); font-size:14px; max-width:calc(100% - 32px); animation:pop .2s ease-out; }
+  @keyframes pop { from { opacity:0; transform:translate(-50%, 8px); } }
+
+  /* ---------- Tiến độ xử lý ---------- */
+  .steps { display:flex; flex-direction:column; gap:10px; margin:16px 0; }
+  .step { display:flex; align-items:center; gap:12px; color:var(--muted); }
+  .step > span:first-child { width:26px; height:26px; border-radius:50%; display:grid; place-items:center; font-size:13px; background:var(--bg); border:1px solid var(--line); flex:none; }
   .step.active { color:var(--text); font-weight:600; }
+  .step.active > span:first-child { background:var(--brand); color:#fff; border-color:var(--brand); }
   .step.ok { color:var(--ok); }
-  .step .bar { flex:1; max-width:240px; }
-  video { width:100%; border-radius:8px; background:#000; }
-  .links a { margin-right:16px; }
-  pre { background:var(--bg); padding:10px; border-radius:8px; max-height:180px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+  .step.ok > span:first-child { background:var(--ok-50); border-color:transparent; }
+  .step .bar { flex:1; max-width:260px; }
+  pre { background:var(--bg); border:1px solid var(--line); padding:12px; border-radius:12px; max-height:200px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+
+  /* ---------- Trang xem video ---------- */
+  video { width:100%; border-radius:12px; background:#000; display:block; }
+  .watch { display:grid; grid-template-columns:1fr 330px; gap:20px; align-items:start; }
+  @media (max-width: 900px) { .watch { grid-template-columns:1fr; } }
+  .watch h2.title { font-size:20px; margin:14px 0 4px; }
+  .links { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 0; }
+  .links a { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:999px; background:var(--brand-50); font-size:13px; font-weight:500; }
+  .links a:hover { background:var(--brand-100); text-decoration:none; }
   table { width:100%; border-collapse:collapse; font-size:14px; }
-  td { border-top:1px solid var(--line); padding:6px 8px; vertical-align:top; }
-  td.time { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; cursor:pointer; }
-  tr.now td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .seg-wrap { max-height:360px; overflow:auto; margin-top:12px; }
-  .watch { display:grid; grid-template-columns: 1fr 300px; gap:16px; align-items:start; }
-  @media (max-width: 860px) { .watch { grid-template-columns: 1fr; } }
-  .plist { max-height:560px; overflow:auto; }
-  .pitem { display:flex; gap:8px; padding:6px; border-radius:8px; color:var(--text); align-items:center; }
-  .pitem:hover { background:var(--bg); }
-  .pitem.cur { background:var(--bg); outline:1px solid var(--line); }
-  .pitem .cover { width:96px; flex:none; border-radius:4px; }
+  td { border-top:1px solid var(--line); padding:8px 10px; vertical-align:top; }
+  td.time { color:var(--accent); white-space:nowrap; font-variant-numeric:tabular-nums; cursor:pointer; font-weight:500; }
+  tr.now td { background:var(--brand-50); }
+  .seg-wrap { max-height:420px; overflow:auto; margin-top:4px; border-radius:12px; }
+  .plist { max-height:600px; overflow:auto; margin:0 -8px; }
+  .pitem { display:flex; gap:10px; padding:8px; border-radius:12px; color:var(--text); align-items:center; }
+  .pitem:hover { background:var(--bg); text-decoration:none; }
+  .pitem.cur { background:var(--brand-50); }
+  .pitem .cover { width:104px; flex:none; border-radius:8px; }
   .pitem .t { font-size:13px; flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .pitem .n { color:var(--muted); font-size:12px; width:20px; text-align:right; flex:none; }
-  .back { display:inline-block; margin-bottom:12px; }
-  .opt { display:flex; gap:12px; align-items:flex-start; padding:12px; border:1px solid var(--line); border-radius:10px; margin-bottom:10px; cursor:pointer; }
-  .opt.sel { border-color:var(--accent); }
-  .opt.off { opacity:.7; }
-  .opt input { margin-top:4px; }
-  .opt .bar { margin-top:6px; max-width:320px; }
+  .pitem .t .badge { margin-top:4px; }
+  .pitem .n { color:var(--muted); font-size:12px; width:20px; text-align:right; flex:none; font-variant-numeric:tabular-nums; }
+  .noplay { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; padding:16px;
+    border-radius:12px; background:var(--brand-50); border:2px dashed var(--brand-100); }
+
+  /* ---------- Cài đặt ---------- */
+  .opt { display:flex; gap:14px; align-items:flex-start; padding:14px 16px; border:1.5px solid var(--line); border-radius:14px; margin-bottom:10px; cursor:pointer;
+    transition:border-color .15s, background .15s; }
+  .opt:hover { border-color:var(--brand-100); }
+  .opt.sel { border-color:var(--brand); background:var(--brand-50); }
+  .opt.off { opacity:.65; }
+  .opt input { margin-top:5px; }
+  .opt .bar { margin-top:8px; max-width:360px; }
   #remoteCard svg { width:100%; height:auto; display:block; }
-  .noplay { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; padding:16px; border-radius:8px; background:var(--bg); border:1px dashed var(--line); }
+  .show-sm { display:none; }
+
+  @media (max-width: 560px) {
+    .card { padding:16px; }
+    .hero { padding:20px; }
+    .hero h2 { font-size:20px; }
+    .hero .bar-input { flex-direction:column; border-radius:18px; }
+    .brand small, .hide-sm { display:none; }
+    .show-sm { display:inline; }
+    .appbar { position:static; }
+    .appbar .wrap { padding:10px 14px; flex-wrap:nowrap; }
+    .brand b { font-size:15px; }
+    .brand .logo { width:32px; height:32px; border-radius:9px; }
+    .chip-link, .appbar button.ghost { padding:5px 10px; font-size:12px; }
+    .lib { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:12px; }
+  }
 </style>
 </head>
 <body>
+<header class="appbar"><div class="wrap">
+  <a href="#" class="brand"><span class="logo">▶</span>
+    <span><b>Lồng tiếng Việt</b><small>Bài giảng YouTube tiếng Trung &amp; Anh</small></span></a>
+  <nav><a href="#settings" class="chip-link" id="storageLink">💾 Nơi lưu video</a>
+    <button class="ghost" id="ejectBtn" hidden title="Dừng ghi vào ổ và tháo ra an toàn">⏏ Tháo ổ an toàn</button></nav>
+</div></header>
 <main>
-  <div class="row"><h1><a href="#">🎬 Lồng tiếng Việt cho YouTube</a></h1>
-    <span><a href="#settings" class="muted" id="storageLink">💾 Nơi lưu video</a>
-      <button class="ghost" id="ejectBtn" hidden title="Dừng ghi vào ổ và tháo ra an toàn">⏏ Tháo ổ an toàn</button></span></div>
-  <p class="sub">Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
-  <div id="conn" class="banner" hidden><span>⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
+  <div id="conn" class="banner warn" hidden><span class="ico">⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
     <button class="ghost" onclick="location.reload()">Tải lại trang</button></div>
   <div id="banner"></div>
   <div id="view"></div>
@@ -132,10 +260,16 @@ window.addEventListener("unhandledrejection", e => { if (!e.reason?.offline) fla
 
 // ---------- Trang chủ: form + thư viện ----------
 function formHtml() {
-  return `<div class="card">
-    <label for="url">Link YouTube (video hoặc playlist)</label>
-    <input id="url" placeholder="https://www.youtube.com/watch?v=...  hoặc  https://www.youtube.com/playlist?list=...">
+  return `<div class="card hero">
+    <h2>Lồng tiếng Việt cho video YouTube</h2>
+    <p>Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
+    <div class="bar-input">
+      <input id="url" aria-label="Link YouTube" placeholder="Dán link video hoặc playlist YouTube…">
+      <button id="go">Bắt đầu lồng tiếng</button>
+    </div>
     <label class="check" id="plWrap" hidden><input type="checkbox" id="pl" checked> Dịch toàn bộ playlist</label>
+    <span id="msg" class="msg"></span>
+    <details class="adv"><summary>Tùy chọn giọng đọc, dịch, âm lượng</summary>
     <div class="grid">
       <div><label for="language">Ngôn ngữ gốc</label>
         <select id="language"><option value="auto">Tự nhận diện</option><option value="zh">Tiếng Trung</option><option value="en">Tiếng Anh</option></select></div>
@@ -149,8 +283,7 @@ function formHtml() {
         <input id="bg" type="range" min="0" max="100" value="25"></div>
       <div><label for="cookies" title="Bật khi YouTube báo 'Sign in to confirm you're not a bot'">Đăng nhập YouTube qua</label>
         <select id="cookies"><option value="none">Không dùng</option><option value="firefox">Firefox (cần đăng nhập YouTube trên Firefox)</option><option value="chrome">Chrome</option></select></div>
-    </div>
-    <div style="margin-top:14px"><button id="go">Bắt đầu lồng tiếng</button><span id="msg" class="msg"></span></div>
+    </div></details>
   </div>
   <div id="lib"></div>`;
 }
@@ -167,7 +300,7 @@ function bindForm() {
   $("#go").onclick = async () => {
     const msg = $("#msg"), btn = $("#go");
     const isPl = $("#url").value.includes("list=") && $("#pl").checked;
-    msg.className = "msg muted"; msg.textContent = isPl ? "Đang đọc danh sách playlist..." : "";
+    msg.className = "msg"; msg.textContent = isPl ? "Đang đọc danh sách playlist..." : "";
     btn.disabled = true;
     try {
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
@@ -188,18 +321,18 @@ function bindForm() {
 }
 
 function flash(text) {
+  document.querySelectorAll(".flash").forEach(e => e.remove());
   const el = document.createElement("div");
-  el.className = "banner"; el.textContent = text;
-  $("#view").prepend(el); setTimeout(() => el.remove(), 6000);
+  el.className = "flash"; el.textContent = text;
+  document.body.append(el); setTimeout(() => el.remove(), 6000);
 }
 
 function tile(j) {
   const bar = j.status === "running" ? `<div class="bar"><div style="width:${progressOf(j)*100}%"></div></div>` : "";
   return `<a class="tile" href="#v=${j.id}">
-    <div class="cover" style="background-image:url('${coverUrl(j)}')">${j.duration ? `<span class="dur">${fmt(j.duration)}</span>` : ""}</div>
-    ${bar}
+    <div class="cover" style="background-image:url('${coverUrl(j)}')">${j.duration ? `<span class="dur">${fmt(j.duration)}</span>` : ""}${bar}</div>
     <div class="info"><div class="t">${esc(j.title)}</div>
-      <div class="row" style="margin-top:6px"><span class="badge ${j.status}">${STATUS[j.status]}</span>${
+      <div class="meta"><span class="badge ${j.status}">${STATUS[j.status]}</span>${
         j.status === "done" && !j.video_ok ? `<span class="muted" title="Video nằm trên ${esc(j.video_place)}">🔌 Cần cắm ổ</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
@@ -220,35 +353,41 @@ function renderLibrary() {
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
   let html = "";
   if (LIB.playlists.length) {
-    html += `<div class="card"><h2>Playlist</h2><div class="lib">${LIB.playlists.map(p => {
+    html += `<div class="section-head"><h2>Playlist</h2><span class="count">${LIB.playlists.length}</span></div>
+      <div class="lib">${LIB.playlists.map(p => {
       const first = byId[p.job_ids.find(id => byId[id]?.status === "done")] || byId[p.job_ids[0]] || {};
       return `<a class="tile" href="#p=${p.id}">
-        <div class="cover" style="background-image:url('${first.id ? coverUrl(first) : ""}')"><span class="stack">☰ ${p.total}</span></div>
-        <div class="bar ok"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div>
+        <div class="cover" style="background-image:url('${first.id ? coverUrl(first) : ""}')"><span class="stack">☰ ${p.total} bài</span></div>
         <div class="info"><div class="t">${esc(p.title)}</div>
-          <div class="muted" style="margin-top:6px">${p.done}/${p.total} video xong${p.failed ? ` · <span class="err">${p.failed} lỗi</span>` : ""}</div></div></a>`;
-    }).join("")}</div></div>`;
+          <div class="bar ok" style="margin-top:10px"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div>
+          <div class="meta"><span class="muted">${p.done}/${p.total} bài đã xong</span>${p.failed ? `<span class="badge error">${p.failed} lỗi</span>` : ""}</div></div></a>`;
+    }).join("")}</div>`;
   }
-  html += `<div class="card"><h2>Video</h2>${singles.length ? `<div class="lib">${singles.map(tile).join("")}</div>` : '<span class="muted">Chưa có video nào.</span>'}</div>`;
+  html += `<div class="section-head"><h2>Video lẻ</h2><span class="count">${singles.length || ""}</span></div>
+    ${singles.length ? `<div class="lib">${singles.map(tile).join("")}</div>` : '<div class="empty">Chưa có video lẻ nào — dán link YouTube ở trên để bắt đầu.</div>'}`;
   el.innerHTML = html;
 }
 
 function renderBanner() {
-  if (LIB.storage) $("#storageLink").textContent = "💾 Lưu tại: " + LIB.storage;
+  if (LIB.storage) $("#storageLink").innerHTML = `💾 <span class="hide-sm">Lưu tại: ${esc(LIB.storage)}</span>`;
   const eb = $("#ejectBtn"), drive = (LIB.ejectable || [])[0];
   if (!eb.disabled) {
     eb.hidden = !drive;
-    if (drive) { eb.textContent = `⏏ Tháo ${drive.name} an toàn`; eb.dataset.loc = drive.id; }
+    if (drive) {
+      eb.innerHTML = `⏏ Tháo <span class="hide-sm">${esc(drive.name)}</span><span class="show-sm">ổ</span> an toàn`;
+      eb.dataset.loc = drive.id; eb.dataset.name = drive.name;
+    }
   }
-  const ejected = (LIB.ejecting || []).map(d => `<div class="banner" style="border-left-color:var(--ok)"><span>✅</span>
+  const ejected = (LIB.ejecting || []).map(d => `<div class="banner ok"><span class="ico">✅</span>
       <span style="flex:1"><b>Đã tháo ${esc(d.name)} an toàn — giờ có thể rút ổ ra.</b>
         <br><span class="muted">Cắm ổ lại là dùng tiếp bình thường.</span></span>
       <button class="ghost resume-drive" data-loc="${esc(d.id)}">Dùng lại ổ ngay</button></div>`).join("");
   const cur = LIB.jobs.find(j => j.id === LIB.current);
-  $("#banner").innerHTML = ejected + (cur ? `<div class="banner">
-      <span>⏳</span>
-      <span style="flex:1">Đang xử lý: <a href="#v=${cur.id}">${esc(cur.title)}</a>
+  $("#banner").innerHTML = ejected + (cur ? `<div class="banner ${LIB.paused_until ? "warn" : ""}">
+      <span class="ico">${LIB.paused_until ? "⏸" : "⏳"}</span>
+      <span style="flex:1;min-width:0">Đang xử lý: <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a>
       ${LIB.queued ? ` — còn <b>${LIB.queued}</b> video chờ` : ""}
+      ${!LIB.paused_until ? `<div class="bar"><div style="width:${progressOf(cur) * 100}%"></div></div>` : ""}
       ${LIB.paused_until ? `<br><span class="err">${esc(LIB.pause_reason)} — tự thử lại lúc ${new Date(LIB.paused_until * 1000).toLocaleTimeString("vi-VN")}.
         ${LIB.pause_reason?.includes("YouTube") ? 'Nếu bị chặn lâu, hãy đăng nhập YouTube trên Firefox rồi chọn "Đăng nhập YouTube qua: Firefox".' : ""}</span>` : ""}
       <br><span class="muted">Máy sẽ không tự ngủ cho tới khi xong. Có thể đóng trình duyệt, nhưng đừng tắt máy.</span></span>
@@ -539,13 +678,13 @@ async function renderRemote(data) {
 function bindEject() {
   $("#ejectBtn").onclick = async () => {
     const b = $("#ejectBtn"), loc = b.dataset.loc;
-    if (!confirm(`${b.textContent.replace("⏏ ", "")}?\nNếu đang xử lý video trên ổ này, video đó sẽ dừng lại và được làm lại khi bạn cắm ổ vào.\nNhớ dừng các video đang phát từ ổ này.`)) return;
+    if (!confirm(`Tháo ${b.dataset.name || "ổ"} an toàn?\nNếu đang xử lý video trên ổ này, video đó sẽ dừng lại và được làm lại khi bạn cắm ổ vào.\nNhớ dừng các video đang phát từ ổ này.`)) return;
     b.disabled = true; b.textContent = "Đang dừng ghi và tháo ổ...";
     try {
       const r = await api("/api/storage/eject", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ location: loc }) });
       flash(r.message);
       b.hidden = true;
-    } finally { b.disabled = false; b.textContent = "⏏ Tháo ổ an toàn"; await refreshLib(); }
+    } finally { b.disabled = false; await refreshLib(); }
   };
 }
 

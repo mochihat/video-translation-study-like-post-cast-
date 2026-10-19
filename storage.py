@@ -7,8 +7,10 @@ Chỉ file video thành phẩm và file tạm khi xử lý được đặt trên
 """
 import errno
 import json
+import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -24,15 +26,40 @@ held = set()  # ổ đang được "tháo an toàn": không ghi, không tự m�
 _mount_fail = {}  # uuid -> (thời điểm, lý do) để không thử mount liên tục
 
 
+_cfg_lock = threading.RLock()
+_last_good = {"cfg": {}}
+
+
 def load_config():
-    try:
-        return json.loads(CONFIG.read_text("utf-8"))
-    except Exception:
-        return {}
+    """Đọc config.json. Đọc lỗi (file đang ghi dở...) thì dùng bản đọc được gần nhất,
+    không bao giờ coi là trống — nếu không sẽ tự sinh lại mã PIN, quên nơi lưu video."""
+    with _cfg_lock:
+        try:
+            cfg = json.loads(CONFIG.read_text("utf-8"))
+        except FileNotFoundError:
+            return {}
+        except Exception:
+            return json.loads(json.dumps(_last_good["cfg"]))
+        _last_good["cfg"] = cfg
+        return json.loads(json.dumps(cfg))
 
 
 def save_config(cfg):
-    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+    # ghi ra file tạm rồi thay thế: lúc nào đọc cũng thấy bản cũ hoặc bản mới đầy đủ
+    with _cfg_lock:
+        tmp = CONFIG.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+        os.replace(tmp, CONFIG)
+        _last_good["cfg"] = json.loads(json.dumps(cfg))
+
+
+def update_config(change):
+    """Đọc - sửa - ghi config trong cùng một khoá để các luồng không ghi đè lên nhau."""
+    with _cfg_lock:
+        cfg = load_config()
+        change(cfg)
+        save_config(cfg)
+        return cfg
 
 
 def current():
@@ -40,9 +67,7 @@ def current():
 
 
 def set_current(loc):
-    cfg = load_config()
-    cfg["location"] = loc
-    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+    update_config(lambda cfg: cfg.__setitem__("location", loc))
 
 
 def _is_system(mountpoint):
@@ -243,6 +268,4 @@ def remember_label(loc):
         return
     p = find(loc)
     if p:
-        cfg = load_config()
-        cfg.setdefault("labels", {})[loc] = p["label"]
-        CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+        update_config(lambda cfg: cfg.setdefault("labels", {}).__setitem__(loc, p["label"]))

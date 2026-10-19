@@ -23,21 +23,22 @@ _fails = {}  # ip -> [số lần sai, thời điểm sai gần nhất]
 
 
 def settings():
-    cfg = storage.load_config()
-    r = cfg.get("remote") or {}
-    if "pin" not in r or "secret" not in r:
+    r = storage.load_config().get("remote") or {}
+    if "pin" in r and "secret" in r:
+        return r
+
+    def create(cfg):  # lần đầu: tạo PIN (trong khoá, để không hai luồng cùng tạo)
+        r = cfg.setdefault("remote", {})
         r.setdefault("enabled", False)
         r.setdefault("pin", f"{secrets.randbelow(10 ** 6):06d}")
         r.setdefault("secret", secrets.token_hex(16))
-        cfg["remote"] = r
-        storage.save_config(cfg)
-    return r
+
+    return storage.update_config(create)["remote"]
 
 
 def _update(**fields):
-    cfg = storage.load_config()
-    cfg["remote"] = {**settings(), **fields}
-    storage.save_config(cfg)
+    settings()
+    storage.update_config(lambda cfg: cfg["remote"].update(fields))
 
 
 def set_enabled(on):
