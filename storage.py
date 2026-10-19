@@ -119,23 +119,23 @@ def find(uuid, fresh=False):
 
 def _mount_error_hint(part, msg):
     if part["fstype"] in ("ntfs", "ntfs3"):
-        return ("Không mở được ổ NTFS — thường do ổ chưa được tháo an toàn hoặc Windows bật Fast Startup "
-                "(ổ bị đánh dấu 'dirty'). Hãy cắm ổ vào Windows, chạy chkdsk rồi tháo an toàn; "
-                f"hoặc trên Linux chạy: sudo ntfsfix -d {part['path']}")
-    return f"Không mở được ổ: {msg.strip()[-200:]}"
+        return ("Cannot open the NTFS drive — usually because it was not safely ejected or Windows Fast Startup "
+                "is on (the drive is marked 'dirty'). Plug it into Windows, run chkdsk and eject it safely; "
+                f"or on Linux run: pkexec ntfsfix -d {part['path']}")
+    return f"Cannot open the drive: {msg.strip()[-200:]}"
 
 
 def mountpoint(uuid, auto_mount=True):
     """Trả về thư mục gốc của ổ; tự mount nếu ổ đã cắm mà chưa mở. Ném lỗi kèm lý do nếu không dùng được."""
     if uuid in held:
-        raise RuntimeError("Ổ đang được tháo an toàn — có thể rút ổ ra")
+        raise RuntimeError("The drive was safely ejected — you can unplug it")
     part = find(uuid)
     if not part:
-        raise RuntimeError("Ổ lưu video chưa được cắm vào máy")
+        raise RuntimeError("The storage drive is not plugged in")
     if part["mountpoint"]:
         return Path(part["mountpoint"])
     if not auto_mount:
-        raise RuntimeError("Ổ lưu video chưa được mở")
+        raise RuntimeError("The storage drive is not mounted")
     failed = _mount_fail.get(uuid)
     if failed and time.time() - failed[0] < 30:
         raise RuntimeError(failed[1])
@@ -148,7 +148,7 @@ def mountpoint(uuid, auto_mount=True):
     _mount_fail.pop(uuid, None)
     part = find(uuid, fresh=True)
     if not part or not part["mountpoint"]:
-        raise RuntimeError("Không mở được ổ lưu video")
+        raise RuntimeError("Cannot open the storage drive")
     return Path(part["mountpoint"])
 
 
@@ -169,9 +169,9 @@ def eject(uuid):
                            capture_output=True, text=True)
         if r.returncode != 0:
             if "busy" in r.stderr.lower():
-                raise RuntimeError("Ổ đang được một chương trình khác mở (ví dụ cửa sổ Files, Terminal đang ở trong ổ) — "
-                                   "hãy đóng chúng rồi thử lại")
-            raise RuntimeError(f"Không tháo được ổ: {r.stderr.strip()[-200:]}")
+                raise RuntimeError("The drive is in use by another program (e.g. a Files window or a Terminal "
+                                   "inside the drive) — close them and try again")
+            raise RuntimeError(f"Cannot eject the drive: {r.stderr.strip()[-200:]}")
     # tắt nguồn ổ (đèn ổ tắt); không được cũng không sao vì đã unmount
     subprocess.run(["udisksctl", "power-off", "-b", part["path"], "--no-user-interaction"], capture_output=True)
     _cache["t"] = 0
@@ -221,12 +221,12 @@ def check(loc):
     except OSError as e:
         if e.errno == errno.EACCES:
             mp = r.parent if loc != "local" else r
-            return False, f"Không có quyền ghi vào ổ này — chạy lệnh: sudo chown $USER \"{mp}\""
+            return False, f"No permission to write to this drive — run: sudo chown $USER \"{mp}\""
         if e.errno == errno.EROFS:
-            return False, "Ổ đang ở chế độ chỉ đọc (thường do Windows Fast Startup hoặc ổ chưa tháo an toàn)"
-        return False, f"Không ghi được vào ổ lưu video ({e.strerror})"
+            return False, "The drive is read-only (usually Windows Fast Startup or it was not safely ejected)"
+        return False, f"Cannot write to the storage drive ({e.strerror})"
     if shutil.disk_usage(r).free < MIN_FREE:
-        return False, "Ổ lưu video sắp đầy (còn dưới 3GB) — hãy xoá bớt video hoặc chọn ổ khác"
+        return False, "The storage drive is almost full (under 3 GB left) — delete some videos or choose another drive"
     return True, None
 
 
@@ -235,17 +235,17 @@ def describe(loc):
         return "Laptop"
     p = find(loc)
     if p:
-        return f"ổ “{p['label']}”"
+        return f"drive “{p['label']}”"
     label = load_config().get("labels", {}).get(loc)
-    return f"ổ “{label}”" if label else "ổ cứng ngoài"
+    return f"drive “{label}”" if label else "external drive"
 
 
 def options():
     """Danh sách nơi có thể chọn để lưu video, kèm dung lượng trống và trạng thái."""
     u = shutil.disk_usage(BASE)
-    opts = [{"id": "local", "label": "Laptop (ổ trong máy)", "path": str(JOBS_DIR), "fstype": "",
+    opts = [{"id": "local", "label": "Laptop (internal drive)", "path": str(JOBS_DIR), "fstype": "",
              "size": u.total, "free": u.free, "connected": True, "ok": u.free >= MIN_FREE,
-             "reason": None if u.free >= MIN_FREE else "Sắp đầy (còn dưới 3GB)", "external": False}]
+             "reason": None if u.free >= MIN_FREE else "Almost full (under 3 GB left)", "external": False}]
     seen = set()
     for p in partitions(fresh=True):
         seen.add(p["uuid"])
@@ -257,9 +257,9 @@ def options():
                      "ok": ok, "reason": reason, "external": p["external"]})
     cur = current()
     if cur != "local" and cur not in seen:  # ổ đang chọn nhưng đã rút ra
-        name = load_config().get("labels", {}).get(cur, "Ổ cứng ngoài")
+        name = load_config().get("labels", {}).get(cur, "External drive")
         opts.append({"id": cur, "label": name, "path": "", "fstype": "", "size": None, "free": None,
-                     "connected": False, "ok": False, "reason": "Chưa cắm vào máy", "external": True})
+                     "connected": False, "ok": False, "reason": "Not plugged in", "external": True})
     return opts
 
 

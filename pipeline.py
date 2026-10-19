@@ -1,4 +1,4 @@
-"""Quy trình: tải video YouTube -> nhận dạng giọng nói -> dịch sang tiếng Việt -> lồng tiếng -> ghép video."""
+"""Quy trình: tải video YouTube -> nhận dạng giọng nói -> dịch sang tiếng Việt / tiếng Trung -> lồng tiếng -> ghép video."""
 import asyncio
 import json
 import shutil
@@ -15,10 +15,57 @@ from deep_translator import GoogleTranslator
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 SR = 24000  # sample rate của track lồng tiếng
 
-VOICES = {
-    "female": "vi-VN-HoaiMyNeural",
-    "male": "vi-VN-NamMinhNeural",
+# Ngôn ngữ đầu ra: mã NLLB, mã Google Dịch, giọng Edge TTS, mã ngôn ngữ phụ đề trong file mp4
+TARGETS = {
+    "vi": {"name": "Vietnamese", "nllb": "vie_Latn", "google": "vi", "sub": "vie",
+           "voices": {"female": "vi-VN-HoaiMyNeural", "male": "vi-VN-NamMinhNeural"}},
+    "zh": {"name": "Chinese (Simplified)", "nllb": "zho_Hans", "google": "zh-CN", "sub": "chi",
+           "voices": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunxiNeural"}},
+    "zh-TW": {"name": "Chinese (Traditional)", "nllb": "zho_Hant", "google": "zh-TW", "sub": "chi",
+              "voices": {"female": "zh-TW-HsiaoChenNeural", "male": "zh-TW-YunJheNeural"}},
 }
+
+# Ngôn ngữ Whisper nhận dạng được -> (mã NLLB, tên). Ngôn ngữ ngoài bảng vẫn dịch, nhưng coi như tiếng Anh.
+LANGS = {
+    "en": ("eng_Latn", "English"), "zh": ("zho_Hans", "Chinese"), "yue": ("yue_Hant", "Cantonese"),
+    "ja": ("jpn_Jpan", "Japanese"), "ko": ("kor_Hang", "Korean"), "vi": ("vie_Latn", "Vietnamese"),
+    "th": ("tha_Thai", "Thai"), "id": ("ind_Latn", "Indonesian"), "ms": ("zsm_Latn", "Malay"),
+    "tl": ("tgl_Latn", "Tagalog"), "km": ("khm_Khmr", "Khmer"), "lo": ("lao_Laoo", "Lao"),
+    "my": ("mya_Mymr", "Burmese"), "hi": ("hin_Deva", "Hindi"), "bn": ("ben_Beng", "Bengali"),
+    "ur": ("urd_Arab", "Urdu"), "ta": ("tam_Taml", "Tamil"), "te": ("tel_Telu", "Telugu"),
+    "mr": ("mar_Deva", "Marathi"), "gu": ("guj_Gujr", "Gujarati"), "kn": ("kan_Knda", "Kannada"),
+    "ml": ("mal_Mlym", "Malayalam"), "pa": ("pan_Guru", "Punjabi"), "ne": ("npi_Deva", "Nepali"),
+    "si": ("sin_Sinh", "Sinhala"), "fr": ("fra_Latn", "French"), "de": ("deu_Latn", "German"),
+    "es": ("spa_Latn", "Spanish"), "pt": ("por_Latn", "Portuguese"), "it": ("ita_Latn", "Italian"),
+    "nl": ("nld_Latn", "Dutch"), "ru": ("rus_Cyrl", "Russian"), "uk": ("ukr_Cyrl", "Ukrainian"),
+    "pl": ("pol_Latn", "Polish"), "cs": ("ces_Latn", "Czech"), "sk": ("slk_Latn", "Slovak"),
+    "ro": ("ron_Latn", "Romanian"), "hu": ("hun_Latn", "Hungarian"), "bg": ("bul_Cyrl", "Bulgarian"),
+    "el": ("ell_Grek", "Greek"), "tr": ("tur_Latn", "Turkish"), "ar": ("arb_Arab", "Arabic"),
+    "he": ("heb_Hebr", "Hebrew"), "fa": ("pes_Arab", "Persian"), "sv": ("swe_Latn", "Swedish"),
+    "da": ("dan_Latn", "Danish"), "no": ("nob_Latn", "Norwegian"), "fi": ("fin_Latn", "Finnish"),
+    "is": ("isl_Latn", "Icelandic"), "et": ("est_Latn", "Estonian"), "lv": ("lvs_Latn", "Latvian"),
+    "lt": ("lit_Latn", "Lithuanian"), "sl": ("slv_Latn", "Slovenian"), "hr": ("hrv_Latn", "Croatian"),
+    "sr": ("srp_Cyrl", "Serbian"), "bs": ("bos_Latn", "Bosnian"), "mk": ("mkd_Cyrl", "Macedonian"),
+    "sq": ("als_Latn", "Albanian"), "ca": ("cat_Latn", "Catalan"), "gl": ("glg_Latn", "Galician"),
+    "eu": ("eus_Latn", "Basque"), "cy": ("cym_Latn", "Welsh"), "af": ("afr_Latn", "Afrikaans"),
+    "sw": ("swh_Latn", "Swahili"), "am": ("amh_Ethi", "Amharic"), "yo": ("yor_Latn", "Yoruba"),
+    "ha": ("hau_Latn", "Hausa"), "so": ("som_Latn", "Somali"), "sn": ("sna_Latn", "Shona"),
+    "ln": ("lin_Latn", "Lingala"), "mg": ("plt_Latn", "Malagasy"), "ka": ("kat_Geor", "Georgian"),
+    "hy": ("hye_Armn", "Armenian"), "az": ("azj_Latn", "Azerbaijani"), "kk": ("kaz_Cyrl", "Kazakh"),
+    "uz": ("uzn_Latn", "Uzbek"), "tk": ("tuk_Latn", "Turkmen"), "tg": ("tgk_Cyrl", "Tajik"),
+    "mn": ("khk_Cyrl", "Mongolian"), "be": ("bel_Cyrl", "Belarusian"), "tt": ("tat_Cyrl", "Tatar"),
+    "ba": ("bak_Cyrl", "Bashkir"), "ps": ("pbt_Arab", "Pashto"), "sd": ("snd_Arab", "Sindhi"),
+    "as": ("asm_Beng", "Assamese"), "bo": ("bod_Tibt", "Tibetan"), "jw": ("jav_Latn", "Javanese"),
+    "su": ("sun_Latn", "Sundanese"), "mi": ("mri_Latn", "Maori"), "ht": ("hat_Latn", "Haitian Creole"),
+    "lb": ("ltz_Latn", "Luxembourgish"), "mt": ("mlt_Latn", "Maltese"), "fo": ("fao_Latn", "Faroese"),
+    "nn": ("nno_Latn", "Norwegian Nynorsk"), "oc": ("oci_Latn", "Occitan"), "yi": ("ydd_Hebr", "Yiddish"),
+    "sa": ("san_Deva", "Sanskrit"),
+}
+NO_SPACES = {"zh", "yue", "ja", "th", "lo", "km", "my", "bo"}  # viết liền, gộp câu không chèn dấu cách
+
+
+def lang_name(code):
+    return LANGS.get(code, (None, code))[1]
 
 _whisper_cache = {}
 
@@ -27,7 +74,7 @@ def ffmpeg(*args):
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error", *args]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"ffmpeg lỗi: {r.stderr.strip()[-500:]}")
+        raise RuntimeError(f"ffmpeg error: {r.stderr.strip()[-500:]}")
 
 
 def read_wav(path):
@@ -81,10 +128,10 @@ def transient_reason(err):
     """Lỗi tạm thời (bị YouTube chặn, mất mạng) thì nên chờ rồi thử lại thay vì bỏ video."""
     msg = str(err).lower()
     if any(k in msg for k in ("not a bot", "http error 429", "too many requests", "rate-limit")):
-        return "YouTube đang tạm chặn tải video"
+        return "YouTube is temporarily blocking downloads"
     if any(k in msg for k in ("name resolution", "failed to resolve", "network is unreachable",
                               "connection reset", "connection refused", "timed out", "no internet")):
-        return "Mất kết nối mạng"
+        return "No network connection"
     return None
 
 
@@ -128,7 +175,7 @@ def download(url, workdir, log, browser=None, progress=None):
         except RuntimeError:
             pass
         thumb.unlink()
-    log(f"Đã tải: {info.get('title')}")
+    log(f"Downloaded: {info.get('title')}")
     return video, info
 
 
@@ -139,9 +186,9 @@ def load_whisper(model_name, log):
     from faster_whisper import WhisperModel
     try:
         model = WhisperModel(model_name, device="cuda", compute_type="int8_float16")
-        log(f"Đã nạp Whisper '{model_name}' trên GPU")
+        log(f"Loaded Whisper '{model_name}' on GPU")
     except Exception as e:
-        log(f"Không dùng được GPU ({e}), chuyển sang CPU (sẽ chậm hơn)")
+        log(f"GPU unavailable ({e}), using CPU (slower)")
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
     _whisper_cache.clear()  # chỉ giữ 1 model trong VRAM
     _whisper_cache[model_name] = model
@@ -157,19 +204,20 @@ def transcribe(audio_path, model_name, language, log, progress):
         beam_size=5,
         initial_prompt="以下是普通话的句子。" if language == "zh" else None,
     )
-    log(f"Ngôn ngữ phát hiện: {info.language} ({info.language_probability:.0%})")
-    if info.language not in NLLB_LANGS:
-        log("Cảnh báo: ngôn ngữ này ngoài Trung/Anh, kết quả dịch có thể kém")
+    if language == "auto":
+        log(f"Detected language: {lang_name(info.language)} ({info.language_probability:.0%} confidence)")
+    if info.language not in LANGS:
+        log(f"Warning: '{info.language}' is not supported by the offline translator, translation may be poor")
     result = []
     for seg in segments:
         text = seg.text.strip()
         if text:
             result.append({"start": seg.start, "end": seg.end, "text": text})
         progress(min(seg.end / max(info.duration, 1), 1.0))
-    return merge_short(result), info.duration, info.language
+    return merge_short(result, sep="" if info.language in NO_SPACES else " "), info.duration, info.language
 
 
-def merge_short(segs, max_gap=0.4, max_len=10.0, min_len=1.2):
+def merge_short(segs, sep=" ", max_gap=0.4, max_len=10.0, min_len=1.2):
     """Gộp các câu quá ngắn liền nhau để giọng đọc tự nhiên hơn."""
     out = []
     for s in segs:
@@ -178,7 +226,7 @@ def merge_short(segs, max_gap=0.4, max_len=10.0, min_len=1.2):
             short = (p["end"] - p["start"]) < min_len or (s["end"] - s["start"]) < min_len
             if short and s["start"] - p["end"] < max_gap and s["end"] - p["start"] < max_len:
                 p["end"] = s["end"]
-                p["text"] = p["text"] + " " + s["text"]
+                p["text"] = p["text"] + sep + s["text"]
                 continue
         out.append(dict(s))
     return out
@@ -186,7 +234,6 @@ def merge_short(segs, max_gap=0.4, max_len=10.0, min_len=1.2):
 
 # ---------- 3. Dịch ----------
 NLLB_REPO = "JustFrederik/nllb-200-distilled-1.3B-ct2-int8"
-NLLB_LANGS = {"zh": "zho_Hans", "en": "eng_Latn", "ja": "jpn_Jpan", "ko": "kor_Hang"}
 _nllb = {}
 
 
@@ -201,18 +248,18 @@ def load_nllb(log):
         except Exception:
             _nllb["model"] = ctranslate2.Translator(path, device="cpu", compute_type="int8")
         _nllb["sp"] = spm.SentencePieceProcessor(model_file=f"{path}/sentencepiece.bpe.model")
-        log("Đã nạp mô hình dịch offline NLLB")
+        log("Loaded offline translation model (NLLB)")
     return _nllb["model"], _nllb["sp"]
 
 
-def translate_offline(segments, lang, log, progress):
+def translate_offline(segments, lang, target, log, progress):
     model, sp = load_nllb(log)
-    src = NLLB_LANGS.get(lang, "eng_Latn")
+    src = LANGS.get(lang, ("eng_Latn",))[0]
     out = []
     for i in range(0, len(segments), 16):
         batch = [s["text"] for s in segments[i:i + 16]]
         tokens = [[src] + sp.encode(t, out_type=str)[:400] + ["</s>"] for t in batch]
-        res = model.translate_batch(tokens, target_prefix=[["vie_Latn"]] * len(batch),
+        res = model.translate_batch(tokens, target_prefix=[[TARGETS[target]["nllb"]]] * len(batch),
                                     beam_size=4, max_decoding_length=300)
         out += [sp.decode(r.hypotheses[0][1:]) for r in res]
         progress(len(out) / len(segments))
@@ -221,17 +268,23 @@ def translate_offline(segments, lang, log, progress):
     return segments
 
 
-def translate(segments, engine, lang, log, progress):
+def translate(segments, engine, lang, target, log, progress):
+    """Bản dịch lưu ở khoá "vi" (và file vi.srt) dù đầu ra là tiếng Trung, để video cũ vẫn mở được."""
+    if lang == target:  # video vốn đã là ngôn ngữ đầu ra: chỉ đọc lại, không dịch
+        log(f"Video is already in {TARGETS[target]['name']}, skipping translation")
+        for s in segments:
+            s["vi"] = s["text"]
+        return segments
     if engine == "google":
         try:
-            return translate_google(segments, log, progress)
+            return translate_google(segments, target, log, progress)
         except Exception as e:
-            log(f"Google Dịch không dùng được ({str(e)[:80]}), chuyển sang dịch offline")
-    return translate_offline(segments, lang, log, progress)
+            log(f"Google Translate unavailable ({str(e)[:80]}), using offline translator")
+    return translate_offline(segments, lang, target, log, progress)
 
 
-def translate_google(segments, log, progress):
-    tr = GoogleTranslator(source="auto", target="vi")
+def translate_google(segments, target, log, progress):
+    tr = GoogleTranslator(source="auto", target=TARGETS[target]["google"])
     tr.translate("hello")  # kiểm tra trước, ném lỗi nếu bị Google chặn
     texts = [s["text"] for s in segments]
     out = []
@@ -251,7 +304,7 @@ def translate_google(segments, log, progress):
                 try:
                     res.append(tr.translate(t) or t)
                 except Exception as e:
-                    log(f"Lỗi dịch '{t[:30]}': {e}")
+                    log(f"Translation error '{t[:30]}': {e}")
                     res.append(t)
         out.extend(r.strip() for r in res)
         chunk.clear()
@@ -340,12 +393,12 @@ def synthesize(segments, voice, total_duration, workdir, log, progress):
     dub = workdir / "dub.wav"
     write_wav(dub, track[:end])
     if sped_up:
-        log(f"{sped_up}/{len(segments)} câu được đọc nhanh hơn để khớp thời gian")
+        log(f"{sped_up}/{len(segments)} lines were read faster to fit the timing")
     return dub
 
 
 # ---------- 5. Ghép video ----------
-def mux(video, dub, srt, bg_volume, out_path):
+def mux(video, dub, srt, bg_volume, out_path, sub_lang="vie"):
     filt = (
         f"[0:a]volume={bg_volume}[bg];"
         "[1:a]volume=1.4[vo];"
@@ -356,18 +409,18 @@ def mux(video, dub, srt, bg_volume, out_path):
         "-filter_complex", filt,
         "-map", "0:v", "-map", "[a]", "-map", "2:s",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        "-c:s", "mov_text", "-metadata:s:s:0", "language=vie",
+        "-c:s", "mov_text", "-metadata:s:s:0", f"language={sub_lang}",
         "-shortest", str(out_path),
     )
 
 
 # ---------- Toàn bộ quy trình ----------
 STEPS = [
-    ("download", "Tải video"),
-    ("transcribe", "Nhận dạng giọng nói"),
-    ("translate", "Dịch sang tiếng Việt"),
-    ("tts", "Tạo giọng đọc tiếng Việt"),
-    ("mux", "Ghép video"),
+    ("download", "Download video"),
+    ("transcribe", "Speech recognition"),
+    ("translate", "Translate"),
+    ("tts", "Generate voice-over"),
+    ("mux", "Combine video"),
 ]
 
 
@@ -391,24 +444,26 @@ def run_pipeline(job, workdir: Path, update):
         audio16, job["model"], job["language"], log, lambda p: update(progress=p)
     )
     if not segments:
-        raise RuntimeError("Không nhận dạng được lời nói nào trong video")
-    log(f"Nhận dạng được {len(segments)} câu")
+        raise RuntimeError("No speech was recognized in this video")
+    update(source_lang=lang)
+    log(f"Recognized {len(segments)} lines")
+    target = job.get("target", "vi")
 
     update(step="translate", progress=0)
-    segments = translate(segments, job.get("translator", "offline"), lang, log, lambda p: update(progress=p))
+    segments = translate(segments, job.get("translator", "offline"), lang, target, log, lambda p: update(progress=p))
     (workdir / "segments.json").write_text(json.dumps(segments, ensure_ascii=False, indent=1), "utf-8")
     write_srt(workdir / "vi.srt", segments, "vi")
     write_srt(workdir / "original.srt", segments, "text")
 
     update(step="tts", progress=0)
-    dub = synthesize(segments, VOICES[job["voice"]], duration, workdir, log, lambda p: update(progress=p))
+    dub = synthesize(segments, TARGETS[target]["voices"][job["voice"]], duration, workdir, log, lambda p: update(progress=p))
 
     update(step="mux", progress=0)
-    mux(video, dub, workdir / "vi.srt", job["bg_volume"], workdir / "dubbed.mp4")
+    mux(video, dub, workdir / "vi.srt", job["bg_volume"], workdir / "dubbed.mp4", TARGETS[target]["sub"])
 
     # chỉ giữ video thành phẩm, phụ đề và ảnh bìa để tiết kiệm ổ cứng
     for name in ("source.mp4", "audio16k.wav", "dub.wav"):
         (workdir / name).unlink(missing_ok=True)
     shutil.rmtree(workdir / "tts", ignore_errors=True)
     update(progress=1)
-    log("Hoàn tất!")
+    log("Done!")

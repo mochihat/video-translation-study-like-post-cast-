@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lồng tiếng Việt cho YouTube</title>
+<title>YouTube Video Dubbing</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -94,6 +94,7 @@
   .hero .bar-input { display:flex; gap:8px; background:#fff; border-radius:999px; padding:6px; box-shadow:var(--shadow-lg); }
   .hero .bar-input input { border:0; background:transparent; color:#141a26; border-radius:999px; box-shadow:none; padding:10px 14px; }
   .hero .bar-input button { flex:none; padding:10px 22px; }
+  .hero .bar-input select.target { flex:none; width:auto; border:0; border-radius:999px; background:var(--brand-50); color:var(--brand); font-weight:600; padding:10px 14px; cursor:pointer; }
   .hero label.check { color:#fff; }
   .hero .msg { color:#fff; margin:10px 0 0; display:block; }
   .hero .msg.err { color:#ffd3d9; }
@@ -209,13 +210,13 @@
 <body>
 <header class="appbar"><div class="wrap">
   <a href="#" class="brand"><span class="logo">▶</span>
-    <span><b>Lồng tiếng Việt</b><small>Bài giảng YouTube tiếng Trung &amp; Anh</small></span></a>
-  <nav><a href="#settings" class="chip-link" id="storageLink">💾 Nơi lưu video</a>
-    <button class="ghost" id="ejectBtn" hidden title="Dừng ghi vào ổ và tháo ra an toàn">⏏ Tháo ổ an toàn</button></nav>
+    <span><b>Video Dubbing</b><small>Translate &amp; dub YouTube lectures</small></span></a>
+  <nav><a href="#settings" class="chip-link" id="storageLink">💾 Storage</a>
+    <button class="ghost" id="ejectBtn" hidden title="Stop writing to the drive and eject it safely">⏏ Safely eject</button></nav>
 </div></header>
 <main>
-  <div id="conn" class="banner warn" hidden><span class="ico">⚠️</span><span style="flex:1">Mất kết nối tới máy chủ — đang tự kết nối lại…</span>
-    <button class="ghost" onclick="location.reload()">Tải lại trang</button></div>
+  <div id="conn" class="banner warn" hidden><span class="ico">⚠️</span><span style="flex:1">Lost connection to the server — reconnecting…</span>
+    <button class="ghost" onclick="location.reload()">Reload page</button></div>
   <div id="banner"></div>
   <div id="view"></div>
 </main>
@@ -223,11 +224,11 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const STATUS = { queued:"Đang chờ", running:"Đang xử lý", done:"Xong", error:"Lỗi" };
+const STATUS = { queued:"Queued", running:"Processing", done:"Done", error:"Failed" };
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
                 set(k, v) { try { localStorage.setItem(k, v); } catch {} },
                 del(k) { try { localStorage.removeItem(k); } catch {} } };
-let STEPS = [], LIB = { jobs:[], playlists:[] }, renderedKey = null;
+let STEPS = [], LANGS = { sources:[], targets:[] }, LIB = { jobs:[], playlists:[] }, renderedKey = null;
 
 function fmt(t) {
   t = Math.floor(t || 0);
@@ -243,7 +244,7 @@ function setOnline(ok) {
   $("#conn").hidden = ok;
   if (ok) reconnected = true;  // lần làm mới kế tiếp sẽ vẽ lại trang đang xem
 }
-const offlineError = () => Object.assign(new Error("Mất kết nối tới máy chủ"), { offline: true });
+const offlineError = () => Object.assign(new Error("Lost connection to the server"), { offline: true });
 const api = async (url, opts) => {
   let r;
   try { r = await fetch(url, opts); } catch { setOnline(false); throw offlineError(); }
@@ -251,38 +252,41 @@ const api = async (url, opts) => {
   try { j = await r.json(); } catch {}
   if (r.status >= 500 && !j.error) { setOnline(false); throw offlineError(); }
   setOnline(true);
-  if (!r.ok) throw Object.assign(new Error(j.error || "Lỗi " + r.status), { status: r.status });
+  if (!r.ok) throw Object.assign(new Error(j.error || "Error " + r.status), { status: r.status });
   return j;
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // thao tác (bấm nút) bị lỗi thì hiện thông báo thay vì im lặng
-window.addEventListener("unhandledrejection", e => { if (!e.reason?.offline) flash("Lỗi: " + (e.reason?.message || e.reason)); });
+window.addEventListener("unhandledrejection", e => { if (!e.reason?.offline) flash("Error: " + (e.reason?.message || e.reason)); });
 
 // ---------- Trang chủ: form + thư viện ----------
 function formHtml() {
   return `<div class="card hero">
-    <h2>Lồng tiếng Việt cho video YouTube</h2>
-    <p>Dán link video hoặc playlist tiếng Trung / tiếng Anh — hệ thống nghe, dịch và đọc lại bằng tiếng Việt.</p>
+    <h2>Translate &amp; dub YouTube videos</h2>
+    <p>Paste a video or playlist link in any language — it is transcribed, translated and read aloud in Vietnamese or Chinese.</p>
     <div class="bar-input">
-      <input id="url" aria-label="Link YouTube" placeholder="Dán link video hoặc playlist YouTube…">
-      <button id="go">Bắt đầu lồng tiếng</button>
+      <input id="url" aria-label="YouTube link" placeholder="Paste a YouTube video or playlist link…">
+      <select id="target" class="target" aria-label="Output language" title="Output language">${LANGS.targets.map(t =>
+        `<option value="${t.id}">→ ${esc(t.name)}</option>`).join("")}</select>
+      <button id="go">Start dubbing</button>
     </div>
-    <label class="check" id="plWrap" hidden><input type="checkbox" id="pl" checked> Dịch toàn bộ playlist</label>
+    <label class="check" id="plWrap" hidden><input type="checkbox" id="pl" checked> Translate the whole playlist</label>
     <span id="msg" class="msg"></span>
-    <details class="adv"><summary>Tùy chọn giọng đọc, dịch, âm lượng</summary>
+    <details class="adv"><summary>Voice, translation and volume options</summary>
     <div class="grid">
-      <div><label for="language">Ngôn ngữ gốc</label>
-        <select id="language"><option value="auto">Tự nhận diện</option><option value="zh">Tiếng Trung</option><option value="en">Tiếng Anh</option></select></div>
-      <div><label for="voice">Giọng đọc</label>
-        <select id="voice"><option value="female">Nữ – Hoài My</option><option value="male">Nam – Nam Minh</option></select></div>
-      <div><label for="model">Chất lượng nhận dạng</label>
-        <select id="model"><option value="small">Nhanh (small)</option><option value="large-v3-turbo" selected>Tốt (large-v3-turbo)</option><option value="large-v3">Tốt nhất, chậm (large-v3)</option></select></div>
-      <div><label for="translator">Công cụ dịch</label>
-        <select id="translator"><option value="offline">Offline trên máy (NLLB)</option><option value="google">Google Dịch (cần mạng)</option></select></div>
-      <div><label for="bg">Âm lượng tiếng gốc: <span id="bgv">25%</span></label>
+      <div><label for="language">Source language</label>
+        <select id="language"><option value="auto">Auto-detect</option>${LANGS.sources.map(l =>
+          `<option value="${l.id}">${esc(l.name)}</option>`).join("")}</select></div>
+      <div><label for="voice">Voice</label>
+        <select id="voice"><option value="female">Female</option><option value="male">Male</option></select></div>
+      <div><label for="model">Recognition quality</label>
+        <select id="model"><option value="small">Fast (small)</option><option value="large-v3-turbo" selected>Good (large-v3-turbo)</option><option value="large-v3">Best, slow (large-v3)</option></select></div>
+      <div><label for="translator">Translator</label>
+        <select id="translator"><option value="offline">Offline on this laptop (NLLB)</option><option value="google">Google Translate (needs internet)</option></select></div>
+      <div><label for="bg">Original audio volume: <span id="bgv">25%</span></label>
         <input id="bg" type="range" min="0" max="100" value="25"></div>
-      <div><label for="cookies" title="Bật khi YouTube báo 'Sign in to confirm you're not a bot'">Đăng nhập YouTube qua</label>
-        <select id="cookies"><option value="none">Không dùng</option><option value="firefox">Firefox (cần đăng nhập YouTube trên Firefox)</option><option value="chrome">Chrome</option></select></div>
+      <div><label for="cookies" title="Turn on when YouTube says 'Sign in to confirm you're not a bot'">Sign in to YouTube via</label>
+        <select id="cookies"><option value="none">Don't use</option><option value="firefox">Firefox (sign in to YouTube in Firefox first)</option><option value="chrome">Chrome</option></select></div>
     </div></details>
   </div>
   <div id="lib"></div>`;
@@ -290,30 +294,39 @@ function formHtml() {
 
 function bindForm() {
   // nhớ lựa chọn lần trước
-  for (const id of ["language","voice","model","translator","bg","cookies"]) {
-    const v = store.get("opt:" + id); if (v !== null) $("#" + id).value = v;
+  for (const id of ["language","target","voice","model","translator","bg","cookies"]) {
+    const v = store.get("opt:" + id); if (v !== null && [...($("#" + id).options || [v])].some(o => (o.value ?? o) === v)) $("#" + id).value = v;
     $("#" + id).addEventListener("change", e => store.set("opt:" + id, e.target.value));
   }
+  // tên giọng đọc theo ngôn ngữ đầu ra (vd. Female – HoaiMy / Female – Xiaoxiao)
+  const voiceNames = () => {
+    const t = LANGS.targets.find(t => t.id === $("#target").value);
+    for (const o of $("#voice").options) {
+      const v = t?.voices[o.value] || "";
+      o.textContent = (o.value === "female" ? "Female" : "Male") + (v ? " – " + v.split("-")[2].replace("Neural", "") : "");
+    }
+  };
+  voiceNames(); $("#target").addEventListener("change", voiceNames);
   $("#bgv").textContent = $("#bg").value + "%";
   $("#bg").oninput = e => $("#bgv").textContent = e.target.value + "%";
   $("#url").oninput = e => $("#plWrap").hidden = !e.target.value.includes("list=");
   $("#go").onclick = async () => {
     const msg = $("#msg"), btn = $("#go");
     const isPl = $("#url").value.includes("list=") && $("#pl").checked;
-    msg.className = "msg"; msg.textContent = isPl ? "Đang đọc danh sách playlist..." : "";
+    msg.className = "msg"; msg.textContent = isPl ? "Reading the playlist..." : "";
     btn.disabled = true;
     try {
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
-        url: $("#url").value, playlist: isPl, language: $("#language").value, voice: $("#voice").value,
+        url: $("#url").value, playlist: isPl, language: $("#language").value, target: $("#target").value, voice: $("#voice").value,
         model: $("#model").value, translator: $("#translator").value, bg_volume: $("#bg").value / 100,
         cookies: $("#cookies").value }) });
       $("#url").value = ""; $("#plWrap").hidden = true;
       if (r.playlist) {
         location.hash = "p=" + r.playlist.id;
-        if (r.updated) setTimeout(() => flash(r.added ? `Đã cập nhật playlist đã có: thêm ${r.added} video vào hàng đợi.` : "Playlist này đã có đủ video."), 300);
+        if (r.updated) setTimeout(() => flash(r.added ? `Updated the existing playlist: ${r.added} videos added to the queue.` : "This playlist already has all its videos."), 300);
       } else {
         location.hash = "v=" + r.job.id;
-        if (r.existing) setTimeout(() => flash("Video này đã được lồng tiếng trước đó — mở lại bản đã lưu."), 300);
+        if (r.existing) setTimeout(() => flash("This video was already dubbed — opening the saved copy."), 300);
       }
     } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
     btn.disabled = false;
@@ -333,12 +346,20 @@ function tile(j) {
     <div class="cover" style="background-image:url('${coverUrl(j)}')">${j.duration ? `<span class="dur">${fmt(j.duration)}</span>` : ""}${bar}</div>
     <div class="info"><div class="t">${esc(j.title)}</div>
       <div class="meta"><span class="badge ${j.status}">${STATUS[j.status]}</span>${
-        j.status === "done" && !j.video_ok ? `<span class="muted" title="Video nằm trên ${esc(j.video_place)}">🔌 Cần cắm ổ</span>` : resumeLabel(j)}</div></div></a>`;
+        j.status === "done" && !j.video_ok ? `<span class="muted" title="The video is on ${esc(j.video_place)}">🔌 Plug in drive</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
 function resumeLabel(j) {
   const p = +store.get("pos:" + j.id);
-  return p > 5 ? `<span class="muted">Đã xem ${fmt(p)}</span>` : "";
+  return p > 5 ? `<span class="muted">Watched ${fmt(p)}</span>` : "";
+}
+
+const targetName = id => LANGS.targets.find(t => t.id === id)?.name || "Vietnamese";
+const sourceName = id => LANGS.sources.find(l => l.id === id)?.name || id;
+// "Japanese → Vietnamese" (ngôn ngữ gốc chỉ biết sau bước nhận dạng giọng nói)
+function langLine(j) {
+  const src = j.source_lang || (j.language !== "auto" ? j.language : null);
+  return `🌐 ${src ? esc(sourceName(src)) : "Auto-detect"} → ${esc(targetName(j.target || "vi"))}`;
 }
 
 function progressOf(j) {
@@ -353,44 +374,44 @@ function renderLibrary() {
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
   let html = "";
   if (LIB.playlists.length) {
-    html += `<div class="section-head"><h2>Playlist</h2><span class="count">${LIB.playlists.length}</span></div>
+    html += `<div class="section-head"><h2>Playlists</h2><span class="count">${LIB.playlists.length}</span></div>
       <div class="lib">${LIB.playlists.map(p => {
       const first = byId[p.job_ids.find(id => byId[id]?.status === "done")] || byId[p.job_ids[0]] || {};
       return `<a class="tile" href="#p=${p.id}">
-        <div class="cover" style="background-image:url('${first.id ? coverUrl(first) : ""}')"><span class="stack">☰ ${p.total} bài</span></div>
+        <div class="cover" style="background-image:url('${first.id ? coverUrl(first) : ""}')"><span class="stack">☰ ${p.total} videos</span></div>
         <div class="info"><div class="t">${esc(p.title)}</div>
           <div class="bar ok" style="margin-top:10px"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div>
-          <div class="meta"><span class="muted">${p.done}/${p.total} bài đã xong</span>${p.failed ? `<span class="badge error">${p.failed} lỗi</span>` : ""}</div></div></a>`;
+          <div class="meta"><span class="muted">${p.done}/${p.total} done</span>${p.failed ? `<span class="badge error">${p.failed} failed</span>` : ""}</div></div></a>`;
     }).join("")}</div>`;
   }
-  html += `<div class="section-head"><h2>Video lẻ</h2><span class="count">${singles.length || ""}</span></div>
-    ${singles.length ? `<div class="lib">${singles.map(tile).join("")}</div>` : '<div class="empty">Chưa có video lẻ nào — dán link YouTube ở trên để bắt đầu.</div>'}`;
+  html += `<div class="section-head"><h2>Videos</h2><span class="count">${singles.length || ""}</span></div>
+    ${singles.length ? `<div class="lib">${singles.map(tile).join("")}</div>` : '<div class="empty">No single videos yet — paste a YouTube link above to get started.</div>'}`;
   el.innerHTML = html;
 }
 
 function renderBanner() {
-  if (LIB.storage) $("#storageLink").innerHTML = `💾 <span class="hide-sm">Lưu tại: ${esc(LIB.storage)}</span>`;
+  if (LIB.storage) $("#storageLink").innerHTML = `💾 <span class="hide-sm">Storage: ${esc(LIB.storage)}</span>`;
   const eb = $("#ejectBtn"), drive = (LIB.ejectable || [])[0];
   if (!eb.disabled) {
     eb.hidden = !drive;
     if (drive) {
-      eb.innerHTML = `⏏ Tháo <span class="hide-sm">${esc(drive.name)}</span><span class="show-sm">ổ</span> an toàn`;
+      eb.innerHTML = `⏏ Eject <span class="hide-sm">${esc(drive.name)}</span><span class="show-sm">drive</span>`;
       eb.dataset.loc = drive.id; eb.dataset.name = drive.name;
     }
   }
   const ejected = (LIB.ejecting || []).map(d => `<div class="banner ok"><span class="ico">✅</span>
-      <span style="flex:1"><b>Đã tháo ${esc(d.name)} an toàn — giờ có thể rút ổ ra.</b>
-        <br><span class="muted">Cắm ổ lại là dùng tiếp bình thường.</span></span>
-      <button class="ghost resume-drive" data-loc="${esc(d.id)}">Dùng lại ổ ngay</button></div>`).join("");
+      <span style="flex:1"><b>${esc(d.name)} was safely ejected — you can unplug it now.</b>
+        <br><span class="muted">Plug it back in to keep using it.</span></span>
+      <button class="ghost resume-drive" data-loc="${esc(d.id)}">Use the drive again</button></div>`).join("");
   const cur = LIB.jobs.find(j => j.id === LIB.current);
   $("#banner").innerHTML = ejected + (cur ? `<div class="banner ${LIB.paused_until ? "warn" : ""}">
       <span class="ico">${LIB.paused_until ? "⏸" : "⏳"}</span>
-      <span style="flex:1;min-width:0">Đang xử lý: <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a>
-      ${LIB.queued ? ` — còn <b>${LIB.queued}</b> video chờ` : ""}
+      <span style="flex:1;min-width:0">Processing: <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a>
+      ${LIB.queued ? ` — <b>${LIB.queued}</b> more in queue` : ""}
       ${!LIB.paused_until ? `<div class="bar"><div style="width:${progressOf(cur) * 100}%"></div></div>` : ""}
-      ${LIB.paused_until ? `<br><span class="err">${esc(LIB.pause_reason)} — tự thử lại lúc ${new Date(LIB.paused_until * 1000).toLocaleTimeString("vi-VN")}.
-        ${LIB.pause_reason?.includes("YouTube") ? 'Nếu bị chặn lâu, hãy đăng nhập YouTube trên Firefox rồi chọn "Đăng nhập YouTube qua: Firefox".' : ""}</span>` : ""}
-      <br><span class="muted">Máy sẽ không tự ngủ cho tới khi xong. Có thể đóng trình duyệt, nhưng đừng tắt máy.</span></span>
+      ${LIB.paused_until ? `<br><span class="err">${esc(LIB.pause_reason)} — retrying automatically at ${new Date(LIB.paused_until * 1000).toLocaleTimeString("en-GB")}.
+        ${LIB.pause_reason?.includes("YouTube") ? 'If it stays blocked, sign in to YouTube in Firefox and choose "Sign in to YouTube via: Firefox".' : ""}</span>` : ""}
+      <br><span class="muted">The laptop won't sleep until the queue is done. You can close the browser, but don't shut down.</span></span>
     </div>` : "");
   document.querySelectorAll(".resume-drive").forEach(b => b.onclick = async () => {
     await api("/api/storage/resume", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ location: b.dataset.loc }) });
@@ -401,37 +422,37 @@ function renderBanner() {
 // ---------- Trang playlist ----------
 function renderPlaylist(id) {
   const p = LIB.playlists.find(p => p.id === id);
-  if (!p) { $("#view").innerHTML = '<a class="back" href="#">← Thư viện</a><p>Không tìm thấy playlist.</p>'; return; }
+  if (!p) { $("#view").innerHTML = '<a class="back" href="#">← Library</a><p>Playlist not found.</p>'; return; }
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
   const emptyTile = (e, i) => `<div class="tile" style="opacity:.75;cursor:default">
     <div class="cover" style="background-image:url('${e.video_id ? `https://i.ytimg.com/vi/${e.video_id}/mqdefault.jpg` : ""}');filter:grayscale(1)"></div>
-    <div class="info"><div class="t">${esc(e.title || "Video đã xoá")}</div>
-      <div class="row" style="margin-top:6px"><span class="badge">Đã xoá</span>
-        <button class="ghost redo-slot" data-i="${i}">Lồng tiếng lại</button></div></div></div>`;
-  $("#view").innerHTML = `<a class="back" href="#">← Thư viện</a>
+    <div class="info"><div class="t">${esc(e.title || "Deleted video")}</div>
+      <div class="row" style="margin-top:6px"><span class="badge">Deleted</span>
+        <button class="ghost redo-slot" data-i="${i}">Dub again</button></div></div></div>`;
+  $("#view").innerHTML = `<a class="back" href="#">← Library</a>
     <div class="card"><div class="row"><h2 style="margin:0">${esc(p.title)}</h2>
-      <span><a class="muted" href="${esc(p.url)}" target="_blank">Mở trên YouTube</a>
-        <button class="ghost" id="syncPl" title="Thêm video mới, lồng tiếng lại video đã xoá và thử lại video lỗi">Cập nhật từ YouTube</button>
-        <button class="ghost" id="delPl">Xoá playlist</button></span></div>
-      <p class="muted">${p.done}/${p.total} video đã lồng tiếng${p.failed ? ` · <span class="err">${p.failed} lỗi</span>` : ""}${p.missing ? ` · ${p.missing} đã xoá` : ""}
-        ${p.failed ? ' <button class="ghost" id="retryPl">Thử lại video lỗi</button>' : ""}</p>
+      <span><a class="muted" href="${esc(p.url)}" target="_blank">Open on YouTube</a>
+        <button class="ghost" id="syncPl" title="Add new videos, re-dub deleted ones and retry failed ones">Update from YouTube</button>
+        <button class="ghost" id="delPl">Delete playlist</button></span></div>
+      <p class="muted">${p.done}/${p.total} videos dubbed${p.settings?.target && p.settings.target !== "vi" ? ` into ${esc(targetName(p.settings.target))}` : ""}${p.failed ? ` · <span class="err">${p.failed} failed</span>` : ""}${p.missing ? ` · ${p.missing} deleted` : ""}
+        ${p.failed ? ' <button class="ghost" id="retryPl">Retry failed videos</button>' : ""}</p>
       <div class="bar ok"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div></div>
     <div class="lib">${p.entries.map((e, i) => byId[e.job_id] ? tile(byId[e.job_id]) : emptyTile(e, i)).join("")}</div>`;
   $("#delPl").onclick = async () => {
-    if (!confirm("Xoá playlist này và toàn bộ video đã lồng tiếng trong đó?")) return;
+    if (!confirm("Delete this playlist and all of its dubbed videos?")) return;
     await api("/api/playlists/" + id, { method:"DELETE" });
     location.hash = "";
   };
   $("#syncPl").onclick = async e => {
-    e.target.disabled = true; e.target.textContent = "Đang đọc playlist...";
+    e.target.disabled = true; e.target.textContent = "Reading playlist...";
     try {
       const r = await api(`/api/playlists/${id}/sync`, { method:"POST" });
-      flash(r.added ? `Đã thêm ${r.added} video vào hàng đợi.` : "Playlist đã đủ video, không có gì mới.");
+      flash(r.added ? `Added ${r.added} videos to the queue.` : "The playlist is complete, nothing new.");
     } finally { await refreshLib(); renderPlaylist(id); }
   };
   if ($("#retryPl")) $("#retryPl").onclick = async () => {
     const r = await api(`/api/playlists/${id}/retry-failed`, { method:"POST" });
-    flash(`Đã đưa ${r.count} video lỗi vào hàng đợi.`);
+    flash(`Queued ${r.count} failed videos again.`);
     await refreshLib(); renderPlaylist(id);
   };
   document.querySelectorAll(".redo-slot").forEach(b => b.onclick = async () => {
@@ -446,13 +467,13 @@ async function renderVideo(id) {
   let j;
   try { j = await api("/api/jobs/" + id); } catch (e) {
     // mất kết nối thì giữ nguyên trang, tự thử lại ở lần làm mới sau
-    if (!e.offline) $("#view").innerHTML = '<a class="back" href="#">← Thư viện</a><p>Không tìm thấy video (có thể đã bị xoá).</p>';
+    if (!e.offline) $("#view").innerHTML = '<a class="back" href="#">← Library</a><p>Video not found (it may have been deleted).</p>';
     return;
   }
   if (location.hash !== "#v=" + id) return;
   const pl = LIB.playlists.find(p => p.job_ids.includes(id));
-  const back = pl ? `<a class="back" href="#p=${pl.id}">← ${esc(pl.title)}</a>` : '<a class="back" href="#">← Thư viện</a>';
-  const key = [id, j.status, j.video_ok, j.local_copy].join(":");
+  const back = pl ? `<a class="back" href="#p=${pl.id}">← ${esc(pl.title)}</a>` : '<a class="back" href="#">← Library</a>';
+  const key = [id, j.status, j.video_ok, j.local_copy].join(":"), target = j.target || "vi";
 
   if (j.status === "done") {
     if (renderedKey === key) { renderSide(pl, id); return; }
@@ -461,41 +482,41 @@ async function renderVideo(id) {
       <div class="watch"><div>
         <div class="card">
           ${j.video_ok
-            ? `<video id="player" controls autoplay src="/files/${id}/dubbed.mp4"><track kind="subtitles" srclang="vi" label="Tiếng Việt" default></video>`
+            ? `<video id="player" controls autoplay src="/files/${id}/dubbed.mp4"><track kind="subtitles" srclang="${target.startsWith("zh") ? "zh" : "vi"}" label="${esc(targetName(target))}" default></video>`
             : `<div class="noplay"><div style="font-size:36px">🔌</div>
-                 <b>Video nằm trên ${esc(j.video_place)}</b>
-                 <span class="muted">Cắm ổ vào máy để xem — trang sẽ tự mở video khi nhận ổ. Lời thoại song ngữ bên dưới vẫn đọc được.</span></div>`}
+                 <b>The video is on ${esc(j.video_place)}</b>
+                 <span class="muted">Plug the drive in to watch — the video opens automatically once the drive is detected. The bilingual transcript below is still available.</span></div>`}
           <div class="row" style="margin-top:10px"><h2 style="margin:0">${esc(j.title)}</h2>
-            <span><button class="ghost" id="redo">Làm lại</button> <button class="ghost" id="del">Xoá</button></span></div>
-          <p class="muted" style="margin:6px 0 0">💾 Lưu tại: ${esc(j.video_place)}${j.local_copy ? " · có bản trên laptop" : ""}
+            <span><button class="ghost" id="redo">Redo</button> <button class="ghost" id="del">Delete</button></span></div>
+          <p class="muted" style="margin:6px 0 0">${langLine(j)} · 💾 Stored on: ${esc(j.video_place)}${j.local_copy ? " · copy on laptop" : ""}
             ${j.video_at && j.video_at !== "local" && (j.video_ok || j.local_copy)
-              ? ` <button class="ghost" id="keep">${j.local_copy ? "Bỏ bản trên laptop" : "Giữ trên laptop (xem khi không cắm ổ)"}</button>` : ""}</p>
+              ? ` <button class="ghost" id="keep">${j.local_copy ? "Remove laptop copy" : "Keep on laptop (watch without the drive)"}</button>` : ""}</p>
           <p class="links" style="margin-bottom:0">
-            ${j.video_ok ? `<a href="/files/${id}/dubbed.mp4?dl=1">⬇ Video lồng tiếng</a>` : ""}
-            <a href="/files/${id}/vi.srt?dl=1">⬇ Phụ đề Việt</a>
-            <a href="/files/${id}/original.srt?dl=1">⬇ Phụ đề gốc</a>
+            ${j.video_ok ? `<a href="/files/${id}/dubbed.mp4?dl=1">⬇ Dubbed video</a>` : ""}
+            <a href="/files/${id}/vi.srt?dl=1">⬇ ${esc(targetName(target))} subtitles</a>
+            <a href="/files/${id}/original.srt?dl=1">⬇ Original subtitles</a>
             <a href="${esc(j.url)}" target="_blank">↗ YouTube</a></p>
         </div>
-        <div class="card"><h2>Lời thoại song ngữ</h2><div class="seg-wrap" id="segs"><table>${(j.segments || []).map((s, i) => `
+        <div class="card"><h2>Bilingual transcript</h2><div class="seg-wrap" id="segs"><table>${(j.segments || []).map((s, i) => `
           <tr data-i="${i}"><td class="time" data-t="${s.start}">${fmt(s.start)}</td><td>${esc(s.text)}</td><td>${esc(s.vi)}</td></tr>`).join("")}
         </table></div></div>
       </div><div id="side"></div></div>`;
     if (j.video_ok) setupPlayer(j, pl);
     renderSide(pl, id);
     if ($("#keep")) $("#keep").onclick = async e => {
-      e.target.disabled = true; e.target.textContent = j.local_copy ? "Đang xoá..." : "Đang chép về laptop...";
+      e.target.disabled = true; e.target.textContent = j.local_copy ? "Removing..." : "Copying to laptop...";
       try { await api(`/api/jobs/${id}/keep-local`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ keep: !j.local_copy }) }); }
       finally { renderedKey = null; renderVideo(id); }
     };
     $("#del").onclick = async () => {
-      if (!confirm("Xoá video này?")) return;
+      if (!confirm("Delete this video?")) return;
       await api("/api/jobs/" + id, { method:"DELETE" });
       location.hash = pl ? "p=" + pl.id : "";
     };
     $("#redo").onclick = async () => {
-      if (!confirm("Lồng tiếng lại video này với cài đặt hiện tại trên trang chủ? (bản cũ vẫn được giữ)")) return;
+      if (!confirm("Dub this video again with the same settings? (the current copy is kept)")) return;
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies }) });
+        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, target, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies }) });
       location.hash = "v=" + r.job.id;
     };
     return;
@@ -505,17 +526,18 @@ async function renderVideo(id) {
   const idx = STEPS.findIndex(s => s.id === j.step);
   $("#view").innerHTML = `${back}<div class="card">
     <div class="row"><h2 style="margin:0">${esc(j.title)}</h2><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
-    ${j.status === "queued" ? `<p class="muted">Đang chờ tới lượt — các video được xử lý lần lượt từng cái.</p>` : ""}
+    ${j.status === "queued" ? `<p class="muted">Waiting in the queue — videos are processed one at a time.</p>` : ""}
+    <p class="muted" style="margin:6px 0 0">${langLine(j)}</p>
     <div class="steps">${STEPS.map((s, i) => {
       const cls = j.status === "error" && i === idx ? "" : i < idx ? "ok" : i === idx ? "active" : "";
       const mark = i < idx ? "✓" : i === idx ? (j.status === "error" ? "✗" : "●") : "○";
       const bar = i === idx && j.status === "running" ? `<div class="bar"><div style="width:${j.progress*100}%"></div></div>` : "";
       return `<div class="step ${cls}"><span>${mark}</span><span>${s.name}</span>${bar}</div>`;
     }).join("")}</div>
-    ${j.error ? `<p class="err">Lỗi: ${esc(j.error)}</p>` : ""}
-    <pre>${esc(j.logs.join("\n")) || "Đang chờ..."}</pre>
-    ${j.status === "error" ? '<button id="retry">Thử lại</button> ' : ""}
-    ${j.status !== "running" ? '<button class="ghost" id="del">' + (j.status === "queued" ? "Huỷ" : "Xoá") + '</button>' : ""}
+    ${j.error ? `<p class="err">Error: ${esc(j.error)}</p>` : ""}
+    <pre>${esc(j.logs.join("\n")) || "Waiting..."}</pre>
+    ${j.status === "error" ? '<button id="retry">Retry</button> ' : ""}
+    ${j.status !== "running" ? '<button class="ghost" id="del">' + (j.status === "queued" ? "Cancel" : "Delete") + '</button>' : ""}
   </div>`;
   if ($("#retry")) $("#retry").onclick = async () => { await api(`/api/jobs/${id}/retry`, { method:"POST" }); renderedKey = null; };
   if ($("#del")) $("#del").onclick = async () => { await api("/api/jobs/" + id, { method:"DELETE" }); location.hash = pl ? "p=" + pl.id : ""; };
@@ -525,9 +547,9 @@ function renderSide(pl, id) {
   const side = $("#side"); if (!side) return;
   if (!pl) { side.remove(); $(".watch").style.gridTemplateColumns = "1fr"; return; }
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
-  side.innerHTML = `<div class="card"><h2>${esc(pl.title)}</h2><p class="muted">${pl.done}/${pl.total} video xong</p>
+  side.innerHTML = `<div class="card"><h2>${esc(pl.title)}</h2><p class="muted">${pl.done}/${pl.total} done</p>
     <div class="plist">${pl.entries.map((e, n) => { const jid = e.job_id, j = byId[jid];
-      if (!j) return `<div class="pitem" style="opacity:.6"><span class="n">${n + 1}</span><div class="t">${esc(e.title || "")}<br><span class="badge">Đã xoá</span></div></div>`;
+      if (!j) return `<div class="pitem" style="opacity:.6"><span class="n">${n + 1}</span><div class="t">${esc(e.title || "")}<br><span class="badge">Deleted</span></div></div>`;
       return `<a class="pitem ${jid === id ? "cur" : ""}" href="#v=${jid}"><span class="n">${n + 1}</span>
         <div class="cover" style="background-image:url('${coverUrl(j)}')"></div>
         <div class="t">${esc(j.title)}<br><span class="badge ${j.status}">${STATUS[j.status]}</span></div></a>`; }).join("")}</div></div>`;
@@ -558,7 +580,7 @@ function setupPlayer(j, pl) {
     if (!document.body.contains(v)) return;
     const t = v.currentTime || lastGood || saved || 0, wasPaused = v.paused && retries === 0 && reason === "stall";
     const wait = Math.min(2000 * 2 ** retries++, 30000);
-    note.hidden = false; note.textContent = `⚠️ ${reason === "stall" ? "Video bị đứng" : "Lỗi tải video"} — tự tải lại sau ${wait / 1000} giây…`;
+    note.hidden = false; note.textContent = `⚠️ ${reason === "stall" ? "Video stalled" : "Video failed to load"} — reloading in ${wait / 1000} s…`;
     setTimeout(() => {
       if (!document.body.contains(v)) return;
       v.src = `/files/${id}/dubbed.mp4?r=${Date.now()}`;
@@ -599,31 +621,31 @@ async function renderSettings(full) {
   if (location.hash !== "#settings") return;
   const mv = s.moving;
   const moveHtml = mv.running
-    ? `<p>⏳ Đang chuyển video ${mv.done + mv.skipped + 1}/${mv.total}: ${esc(mv.title || "")}</p>
+    ? `<p>⏳ Moving video ${mv.done + mv.skipped + 1}/${mv.total}: ${esc(mv.title || "")}</p>
        <div class="bar ok"><div style="width:${mv.total ? (mv.done + mv.skipped) / mv.total * 100 : 0}%"></div></div>`
-    : mv.total ? `<p class="${mv.error ? "err" : "muted"}">${mv.error ? "Lỗi khi chuyển: " + esc(mv.error)
-        : `Đã chuyển ${mv.done} video${mv.skipped ? `, bỏ qua ${mv.skipped} video (ổ cũ chưa cắm)` : ""}.`}</p>` : "";
+    : mv.total ? `<p class="${mv.error ? "err" : "muted"}">${mv.error ? "Error while moving: " + esc(mv.error)
+        : `Moved ${mv.done} videos${mv.skipped ? `, skipped ${mv.skipped} (old drive not plugged in)` : ""}.`}</p>` : "";
   if (!full) { const m = $("#moveState"); if (m) m.innerHTML = moveHtml; return; }
 
-  $("#view").innerHTML = `<a class="back" href="#">← Thư viện</a>
-    <div class="card"><h2>💾 Nơi lưu video</h2>
-      <p class="muted">Video lồng tiếng (file nặng) và file tạm khi xử lý sẽ được lưu ở nơi bạn chọn.
-        Tên video, ảnh bìa, phụ đề và lời thoại song ngữ luôn nằm trên laptop, nên rút ổ ra vẫn xem được thư viện.</p>
+  $("#view").innerHTML = `<a class="back" href="#">← Library</a>
+    <div class="card"><h2>💾 Video storage</h2>
+      <p class="muted">Dubbed videos (large files) and temporary processing files are saved where you choose.
+        Titles, covers, subtitles and transcripts always stay on the laptop, so the library still works with the drive unplugged.</p>
       ${s.options.map(o => {
         const used = o.size && o.free != null ? 1 - o.free / o.size : null;
         return `<label class="opt ${o.id === s.current ? "sel" : ""} ${o.ok ? "" : "off"}">
           <input type="radio" name="loc" value="${esc(o.id)}" ${o.id === s.current ? "checked" : ""} ${o.ok || o.id === s.current ? "" : "disabled"}>
           <div style="flex:1">
-            <b>${o.external ? "🔌" : "💻"} ${esc(o.label)}</b> ${o.id === s.current ? '<span class="badge done">Đang dùng</span>' : ""}
+            <b>${o.external ? "🔌" : "💻"} ${esc(o.label)}</b> ${o.id === s.current ? '<span class="badge done">In use</span>' : ""}
             <div class="muted">${esc(o.path)}${o.fstype ? " · " + esc(o.fstype.toUpperCase()) : ""}
-              ${o.size ? ` · trống ${gb(o.free)} / ${gb(o.size)}` : ""}</div>
+              ${o.size ? ` · ${gb(o.free)} free of ${gb(o.size)}` : ""}</div>
             ${used != null ? `<div class="bar ${used > .9 ? "" : "ok"}"><div style="width:${used * 100}%"></div></div>` : ""}
             ${o.reason ? `<div class="err" style="font-size:13px;margin-top:4px">${esc(o.reason)}</div>` : ""}
           </div></label>`;
       }).join("")}
       ${s.pending_move ? `<label class="check"><input type="checkbox" id="moveOld" checked>
-        Chuyển ${s.pending_move} video đã có sang nơi lưu mới (giải phóng chỗ ở nơi cũ)</label>` : ""}
-      <div style="margin-top:14px"><button id="saveLoc">Lưu lựa chọn</button> <button class="ghost" id="rescan">Quét lại ổ</button>
+        Move ${s.pending_move} existing videos to this location (frees space on the old one)</label>` : ""}
+      <div style="margin-top:14px"><button id="saveLoc">Save</button> <button class="ghost" id="rescan">Rescan drives</button>
         <span id="locMsg" class="msg"></span></div>
       <div id="moveState" style="margin-top:12px">${moveHtml}</div>
     </div>
@@ -635,12 +657,12 @@ async function renderSettings(full) {
   $("#rescan").onclick = () => renderSettings(true);
   $("#saveLoc").onclick = async () => {
     const loc = document.querySelector("input[name=loc]:checked")?.value, msg = $("#locMsg");
-    msg.className = "msg muted"; msg.textContent = "Đang kiểm tra ổ...";
+    msg.className = "msg muted"; msg.textContent = "Checking drive...";
     try {
       await api("/api/storage", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ location: loc, move: !!$("#moveOld")?.checked }) });
       await renderSettings(true);
-      flash("Đã lưu. Video mới sẽ được lưu ở nơi bạn chọn.");
+      flash("Saved. New videos will be stored in the selected location.");
     } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
   };
 }
@@ -650,36 +672,36 @@ async function renderRemote(data) {
   let r = data;
   if (!r) { try { r = await api("/api/remote"); } catch { return; } }
   const post = async body => renderRemote(await api("/api/remote", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) }));
-  el.innerHTML = `<div class="row"><h2 style="margin:0">📱 Xem trên điện thoại</h2>
-      <button ${r.enabled ? 'class="ghost"' : ""} id="remoteToggle">${r.enabled ? "Tắt" : "Bật"}</button></div>
-    <p class="muted">Xem video trên điện thoại hoặc máy khác <b>dùng cùng Wi-Fi</b>${r.wifi ? ` (“${esc(r.wifi)}”)` : ""} với laptop.
-      Laptop phải đang bật, không ngủ và cắm ổ chứa video.</p>
+  el.innerHTML = `<div class="row"><h2 style="margin:0">📱 Watch on your phone</h2>
+      <button ${r.enabled ? 'class="ghost"' : ""} id="remoteToggle">${r.enabled ? "Turn off" : "Turn on"}</button></div>
+    <p class="muted">Watch on a phone or another device <b>on the same Wi-Fi</b>${r.wifi ? ` (“${esc(r.wifi)}”)` : ""} as the laptop.
+      The laptop must be on, awake, and have the video drive plugged in.</p>
     ${!r.enabled ? "" : r.urls.length ? `
       <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
         <div style="background:#fff;border-radius:10px;padding:6px;width:190px;line-height:0">${r.urls[0].qr}</div>
         <div style="flex:1;min-width:220px">
-          <p style="margin:0 0 6px"><b>Cách 1:</b> mở Camera trên điện thoại, quét mã QR bên cạnh.</p>
-          <p style="margin:0 0 6px"><b>Cách 2:</b> mở trình duyệt điện thoại, gõ
+          <p style="margin:0 0 6px"><b>Option 1:</b> open the phone's Camera and scan the QR code.</p>
+          <p style="margin:0 0 6px"><b>Option 2:</b> open the phone's browser and go to
             ${r.urls.map(u => `<br><code style="font-size:17px">${esc(u.url)}</code>`).join("")}
-            <br>rồi nhập mã PIN: <b style="font-size:22px;letter-spacing:4px">${esc(r.pin)}</b></p>
-          <p class="muted" style="margin:0">Mỗi điện thoại chỉ cần nhập PIN một lần.
-            <button class="ghost" id="newPin">Đổi mã PIN</button></p>
+            <br>then enter the PIN: <b style="font-size:22px;letter-spacing:4px">${esc(r.pin)}</b></p>
+          <p class="muted" style="margin:0">Each phone only needs the PIN once.
+            <button class="ghost" id="newPin">Change PIN</button></p>
         </div>
       </div>
-      <p class="muted" style="margin-bottom:0">Không vào được? Wi-Fi trường học/công cộng thường chặn các thiết bị kết nối với nhau.
-        Khi đó hãy bật <b>điểm phát Wi-Fi</b> trên điện thoại, cho laptop kết nối vào, rồi mở lại trang này để lấy địa chỉ mới.</p>`
-    : `<p class="err">Laptop chưa kết nối Wi-Fi / mạng nào.</p>`}`;
+      <p class="muted" style="margin-bottom:0">Can't connect? School/public Wi-Fi often blocks devices from talking to each other.
+        In that case turn on the phone's <b>hotspot</b>, connect the laptop to it, then reopen this page for the new address.</p>`
+    : `<p class="err">The laptop is not connected to any Wi-Fi / network.</p>`}`;
   $("#remoteToggle").onclick = () => post({ enabled: !r.enabled });
   if ($("#newPin")) $("#newPin").onclick = () => {
-    if (confirm("Đổi mã PIN? Các điện thoại đã đăng nhập sẽ phải nhập mã mới.")) post({ new_pin: true });
+    if (confirm("Change the PIN? Phones that are already signed in will need the new PIN.")) post({ new_pin: true });
   };
 }
 
 function bindEject() {
   $("#ejectBtn").onclick = async () => {
     const b = $("#ejectBtn"), loc = b.dataset.loc;
-    if (!confirm(`Tháo ${b.dataset.name || "ổ"} an toàn?\nNếu đang xử lý video trên ổ này, video đó sẽ dừng lại và được làm lại khi bạn cắm ổ vào.\nNhớ dừng các video đang phát từ ổ này.`)) return;
-    b.disabled = true; b.textContent = "Đang dừng ghi và tháo ổ...";
+    if (!confirm(`Safely eject ${b.dataset.name || "the drive"}?\nIf a video is being processed on this drive, it stops and restarts when you plug the drive back in.\nRemember to stop any video playing from this drive.`)) return;
+    b.disabled = true; b.textContent = "Stopping writes and ejecting...";
     try {
       const r = await api("/api/storage/eject", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ location: loc }) });
       flash(r.message);
@@ -712,7 +734,7 @@ window.addEventListener("hashchange", async () => { renderedKey = null; $("#view
 
 (async () => {
   // máy chủ chưa chạy (vừa bật máy) thì chờ và thử lại
-  while (true) { try { STEPS = await api("/api/steps"); break; } catch { await sleep(3000); } }
+  while (true) { try { [STEPS, LANGS] = await Promise.all([api("/api/steps"), api("/api/languages")]); break; } catch { await sleep(3000); } }
   bindEject();
   await refreshLib();
   route();

@@ -15,7 +15,7 @@ from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 
 import remote
 import storage
-from pipeline import STEPS, cookie_opts, run_pipeline, transient_reason
+from pipeline import LANGS, STEPS, TARGETS, cookie_opts, run_pipeline, transient_reason
 
 BASE = Path(__file__).parent
 JOBS_DIR = BASE / "jobs"
@@ -71,7 +71,7 @@ def load_existing():
         save(job)
         work_queue.put(job["id"])
     if pending:
-        print(f"  Tiếp tục {len(pending)} video còn dở")
+        print(f"  Resuming {len(pending)} unfinished videos")
 
 
 class KeepAwake:
@@ -83,8 +83,8 @@ class KeepAwake:
             return
         for what in ("sleep:idle:handle-lid-switch", "sleep:idle"):
             p = subprocess.Popen(
-                ["systemd-inhibit", f"--what={what}", "--who=Lồng tiếng YouTube",
-                 "--why=Đang lồng tiếng video", "sleep", "infinity"],
+                ["systemd-inhibit", f"--what={what}", "--who=YouTube dubbing",
+                 "--why=Dubbing videos", "sleep", "infinity"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             time.sleep(0.5)
@@ -126,7 +126,7 @@ def worker():
         def report(**kw):
             # đang tháo ổ an toàn -> dừng ghi ngay, video này sẽ làm lại khi cắm ổ
             if current.get("loc") in storage.held:
-                raise RuntimeError("Dừng để tháo ổ an toàn")
+                raise RuntimeError("Stopped to safely eject the drive")
             update(**kw)
 
         job["status"] = "running"
@@ -149,19 +149,19 @@ def worker():
             except Exception as e:
                 current["loc"] = None
                 if loc in storage.held:
-                    update(log="Tạm dừng để tháo ổ an toàn — video này sẽ làm lại khi cắm ổ vào")
+                    update(log="Paused to safely eject the drive — this video will restart when the drive is plugged back in")
                     continue
                 traceback.print_exc()
                 if not storage.check(loc)[0]:
                     # ổ bị rút ra / đầy giữa chừng: chờ ổ sẵn sàng rồi làm lại video này
-                    update(log=f"{storage.check(loc)[1]} — tạm dừng, sẽ làm lại video này khi ổ sẵn sàng")
+                    update(log=f"{storage.check(loc)[1]} — paused, this video will restart when the drive is ready")
                     continue
                 reason = transient_reason(e)
                 if reason:
                     # lỗi tạm thời: dừng cả hàng đợi rồi thử lại, không đánh lỗi video
                     wait = next(waits, None)
                     if wait is not None:
-                        update(log=f"{reason}, chờ {wait} phút rồi thử lại")
+                        update(log=f"{reason}, retrying in {wait} minutes")
                         current["paused_until"] = time.time() + wait * 60
                         current["pause_reason"] = reason
                         time.sleep(wait * 60)
@@ -169,7 +169,7 @@ def worker():
                         continue
                 elif attempt == 0:
                     attempt += 1
-                    update(log=f"Lỗi: {e} — thử lại sau 15 giây")
+                    update(log=f"Error: {e} — retrying in 15 seconds")
                     time.sleep(15)
                     continue
                 job["status"] = "error"
@@ -207,7 +207,7 @@ def fresh_workdir(loc, job_id):
         if workdir.exists():
             shutil.rmtree(workdir)
     except OSError as e:
-        print(f"  Không dọn được {workdir} ({e}), dùng thư mục tạm mới", flush=True)
+        print(f"  Could not clean {workdir} ({e}), using a new temp folder", flush=True)
         workdir = workdir.with_name(f"{job_id}-{uuid.uuid4().hex[:4]}")
     workdir.mkdir(parents=True, exist_ok=True)
     return workdir
@@ -241,22 +241,27 @@ def list_id_from_url(url):
     return parse_qs(urlparse(url).query).get("list", [None])[0]
 
 
-SETTING_DEFAULTS = {"language": "auto", "voice": "female", "model": "large-v3-turbo",
+SETTING_DEFAULTS = {"language": "auto", "target": "vi", "voice": "female", "model": "large-v3-turbo",
                     "translator": "offline", "bg_volume": 0.25, "cookies": "none"}
 
 
 def settings_of(source):
     s = {k: source.get(k, v) for k, v in SETTING_DEFAULTS.items()}
     s["bg_volume"] = float(s["bg_volume"])
+    if s["target"] not in TARGETS:
+        s["target"] = "vi"
+    if s["language"] != "auto" and s["language"] not in LANGS:
+        s["language"] = "auto"
     return s
 
 
 def find_existing(video_id, settings):
-    """Video đã (hoặc đang) được lồng tiếng với cùng giọng đọc thì dùng lại."""
+    """Video đã (hoặc đang) được lồng tiếng sang cùng ngôn ngữ, cùng giọng đọc thì dùng lại."""
     if not video_id:
         return None
     for j in jobs.values():
-        if j.get("video_id") == video_id and j["voice"] == settings["voice"] and j["status"] != "error":
+        if j.get("video_id") == video_id and j["voice"] == settings["voice"] \
+                and j.get("target", "vi") == settings["target"] and j["status"] != "error":
             return j
     return None
 
@@ -337,8 +342,8 @@ def light(job):
     return {k: v for k, v in job.items() if k != "logs"}
 
 
-LOGIN_PAGE = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Nhập mã PIN</title>
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Enter PIN</title>
 <style>
  :root{--bg:#f5f6f8;--card:#fff;--text:#1d2330;--muted:#6b7385;--line:#e3e6ec;--accent:#d93025}
  @media (prefers-color-scheme: dark){:root{--bg:#14161b;--card:#1d2027;--text:#e8eaef;--muted:#9aa1b0;--line:#2d313b;--accent:#ff6b5e}}
@@ -348,10 +353,10 @@ LOGIN_PAGE = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
  button{margin-top:14px;width:100%;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px;font:inherit;font-weight:600}
  p{color:var(--muted);font-size:14px} .err{color:var(--accent)}
 </style></head><body><form method="post" action="/login">
-<h2 style="margin-top:0">🎬 Lồng tiếng Việt</h2>
-<p>Nhập mã PIN hiện trên laptop<br>(💾 Nơi lưu video → 📱 Xem trên điện thoại)</p>
+<h2 style="margin-top:0">🎬 Video Dubbing</h2>
+<p>Enter the PIN shown on the laptop<br>(💾 Storage → 📱 Watch on your phone)</p>
 <input name="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus required>
-%ERROR%<button>Vào xem</button></form></body></html>"""
+%ERROR%<button>Open</button></form></body></html>"""
 
 
 @app.before_request
@@ -361,8 +366,8 @@ def guard():
     if remote.is_local(addr):
         return None
     if not remote.settings()["enabled"] or not remote.is_private(addr):
-        return ("Tính năng xem từ điện thoại / máy khác đang tắt. "
-                "Bật trong trang 💾 Nơi lưu video trên laptop."), 403
+        return ("Watching from a phone / other device is turned off. "
+                "Turn it on in the 💾 Storage page on the laptop."), 403
     if request.cookies.get(remote.COOKIE) == remote.token():
         return None
     pin = request.form.get("pin") if request.method == "POST" and request.path == "/login" else request.args.get("pin")
@@ -371,10 +376,10 @@ def guard():
             resp = redirect("/")
             resp.set_cookie(remote.COOKIE, remote.token(), max_age=365 * 86400, httponly=True, samesite="Lax")
             return resp
-        msg = ("Nhập sai quá nhiều lần — thử lại sau 15 phút." if remote.locked(addr) else "Mã PIN không đúng.")
+        msg = ("Too many wrong attempts — try again in 15 minutes." if remote.locked(addr) else "Wrong PIN.")
         return LOGIN_PAGE.replace("%ERROR%", f'<p class="err">{msg}</p>'), 401
     if request.path.startswith(("/api/", "/files/")):
-        return jsonify(error="Cần nhập mã PIN"), 401
+        return jsonify(error="PIN required"), 401
     return LOGIN_PAGE.replace("%ERROR%", ""), 401
 
 
@@ -408,12 +413,18 @@ def steps():
     return jsonify([{"id": s, "name": n} for s, n in STEPS])
 
 
+@app.get("/api/languages")
+def languages():
+    return jsonify(sources=sorted(({"id": k, "name": n} for k, (_, n) in LANGS.items()), key=lambda l: l["name"]),
+                   targets=[{"id": k, "name": t["name"], "voices": t["voices"]} for k, t in TARGETS.items()])
+
+
 @app.post("/api/jobs")
 def create_job():
     data = request.get_json(force=True)
     url = (data.get("url") or "").strip()
     if not url.startswith("http"):
-        return jsonify(error="Link YouTube không hợp lệ"), 400
+        return jsonify(error="Invalid YouTube link"), 400
     settings = settings_of(data)
 
     if data.get("playlist") and "list=" in url:
@@ -440,9 +451,9 @@ def sync_playlist(url, settings):
     try:
         title, found = expand_playlist(url, settings["cookies"])
     except Exception as e:
-        return jsonify(error=f"Không đọc được playlist: {e}"), 400
+        return jsonify(error=f"Could not read the playlist: {e}"), 400
     if not found:
-        return jsonify(error="Playlist không có video nào xem được"), 400
+        return jsonify(error="This playlist has no playable videos"), 400
     lid = list_id_from_url(url)
     pl = next((p for p in playlists.values() if lid and list_id_from_url(p["url"]) == lid), None)
     is_new = pl is None
@@ -487,9 +498,9 @@ def redo_slot(pl_id, idx):
         abort(404)
     e = pl["entries"][idx]
     if e["job_id"] in jobs:
-        return jsonify(error="Vị trí này đã có video"), 400
+        return jsonify(error="This slot already has a video"), 400
     if not e["video_id"]:
-        return jsonify(error="Không rõ video ở vị trí này — hãy bấm 'Cập nhật từ YouTube'"), 400
+        return jsonify(error="Unknown video in this slot — click 'Update from YouTube'"), 400
     settings = settings_of(pl.get("settings", {}))
     job = find_existing(e["video_id"], settings) or new_job(
         f"https://www.youtube.com/watch?v={e['video_id']}", settings, e["title"], e["video_id"], pl_id)
@@ -560,7 +571,7 @@ def get_job(job_id):
 def retry_job(job_id):
     job = jobs.get(job_id) or abort(404)
     if job["status"] != "error":
-        return jsonify(error="Chỉ thử lại được video bị lỗi"), 400
+        return jsonify(error="Only failed videos can be retried"), 400
     requeue(job)
     return jsonify(light(job))
 
@@ -591,7 +602,7 @@ def delete_job(job_id):
     if job_id not in jobs:
         abort(404)
     if not remove_job(job_id):
-        return jsonify(error="Không thể xoá khi đang xử lý"), 400
+        return jsonify(error="Cannot delete while processing"), 400
     return jsonify(ok=True)
 
 
@@ -615,7 +626,7 @@ def files(job_id, name):
     if name == "dubbed.mp4":
         path = storage.video_path(jobs[job_id])
         if not path:
-            return jsonify(error=f"Video nằm trên {storage.describe(jobs[job_id]['video_at'])} — hãy cắm ổ vào"), 404
+            return jsonify(error=f"The video is on {storage.describe(jobs[job_id]['video_at'])} — plug the drive in"), 404
         folder = path.parent
     return send_from_directory(folder, name, as_attachment=request.args.get("dl") == "1")
 
@@ -635,14 +646,14 @@ def keep_local(job_id):
     job = jobs.get(job_id) or abort(404)
     local = JOBS_DIR / job_id / "dubbed.mp4"
     if job.get("video_at", "local") == "local":
-        return jsonify(error="Video này vốn đã nằm trên laptop"), 400
+        return jsonify(error="This video is already on the laptop"), 400
     if request.get_json(force=True).get("keep"):
         try:
             src = storage.root(job["video_at"]) / job_id / "dubbed.mp4"
         except RuntimeError as e:
             return jsonify(error=str(e)), 400
         if shutil.disk_usage(JOBS_DIR).free - src.stat().st_size < storage.MIN_FREE:
-            return jsonify(error="Laptop không đủ chỗ trống để giữ video này"), 400
+            return jsonify(error="Not enough free space on the laptop for this video"), 400
         shutil.copy2(src, local.with_suffix(".part"))
         local.with_suffix(".part").replace(local)
     else:
@@ -672,7 +683,7 @@ def move_videos(target):
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest / "dubbed.mp4.part")
             if (dest / "dubbed.mp4.part").stat().st_size != src.stat().st_size:
-                raise RuntimeError(f"Chép không trọn vẹn: {job['title']}")
+                raise RuntimeError(f"Incomplete copy: {job['title']}")
             (dest / "dubbed.mp4.part").replace(dest / "dubbed.mp4")
             job["video_at"] = target
             save(job)
@@ -692,23 +703,23 @@ def eject_storage():
     """Tháo ổ an toàn: dừng ghi (video đang làm sẽ làm lại sau), unmount, tắt nguồn ổ."""
     loc = (request.get_json(silent=True) or {}).get("location") or storage.current()
     if loc == "local" or loc not in used_drives():
-        return jsonify(error="Không có ổ ngoài nào để tháo"), 400
+        return jsonify(error="No external drive to eject"), 400
     name = storage.describe(loc)
     if move_state["running"]:
-        return jsonify(error="Đang chuyển video sang ổ — chờ chuyển xong rồi hãy tháo"), 400
+        return jsonify(error="Videos are being moved — wait until it finishes before ejecting"), 400
     storage.held.add(loc)
     deadline = time.time() + 180
     while current.get("loc") == loc and time.time() < deadline:  # chờ worker dừng ghi
         time.sleep(1)
     if current.get("loc") == loc:
         storage.held.discard(loc)
-        return jsonify(error="Video đang xử lý chưa dừng ghi được (đang ghép video) — thử lại sau 1–2 phút"), 400
+        return jsonify(error="The current video is still writing (combining video) — try again in 1–2 minutes"), 400
     try:
         storage.eject(loc)
     except RuntimeError as e:
         storage.held.discard(loc)
         return jsonify(error=str(e)), 400
-    return jsonify(ok=True, message=f"Đã tháo {name} an toàn — giờ có thể rút ổ ra.")
+    return jsonify(ok=True, message=f"{name} was safely ejected — you can unplug it now.")
 
 
 @app.post("/api/storage/resume")
@@ -745,6 +756,6 @@ def set_storage():
 if __name__ == "__main__":
     load_existing()
     threading.Thread(target=worker, daemon=True).start()
-    print("\n  Mở trình duyệt tại: http://localhost:5000\n", flush=True)
+    print("\n  Open in your browser: http://localhost:5000\n", flush=True)
     # nghe trên mọi địa chỉ để điện thoại cùng Wi-Fi vào được; guard() chặn khi chưa bật / sai PIN
     app.run(host="0.0.0.0", port=remote.PORT, threaded=True)

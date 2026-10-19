@@ -1,8 +1,8 @@
 # video-translation-study-like-post-cast-
 
-Trang web chạy trên máy (local) giúp **dịch video YouTube tiếng Trung / tiếng Anh sang tiếng Việt và lồng tiếng tự động**.
+Trang web chạy trên máy (local) giúp **dịch video YouTube ở gần 100 ngôn ngữ (Trung, Anh, Nhật, Hàn, Pháp…) sang tiếng Việt hoặc tiếng Trung và lồng tiếng tự động**. Giao diện bằng tiếng Anh.
 
-Dán link YouTube → hệ thống tải video, nghe và chép lời, dịch sang tiếng Việt, đọc lại bằng giọng Việt rồi ghép thành video mới (kèm phụ đề tiếng Việt).
+Dán link YouTube → hệ thống tải video, tự nhận diện ngôn ngữ, nghe và chép lời, dịch sang ngôn ngữ đầu ra đã chọn, đọc lại bằng giọng tương ứng rồi ghép thành video mới (kèm phụ đề).
 
 ## Cách hoạt động
 
@@ -10,11 +10,11 @@ Dán link YouTube → hệ thống tải video, nghe và chép lời, dịch san
 |---|---|---|
 | Tải video | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Internet |
 | Nhận dạng giọng nói | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (large-v3-turbo) | GPU trên máy |
-| Dịch sang tiếng Việt | NLLB-200 1.3B của Meta (offline) hoặc Google Dịch | GPU trên máy / Internet |
-| Lồng tiếng | Microsoft Edge TTS (giọng Hoài My / Nam Minh) | Internet |
+| Dịch sang tiếng Việt / Trung | NLLB-200 1.3B của Meta (offline) hoặc Google Dịch | GPU trên máy / Internet |
+| Lồng tiếng | Microsoft Edge TTS (Việt: Hoài My / Nam Minh; Trung giản thể: Xiaoxiao / Yunxi; Trung phồn thể: HsiaoChen / YunJhe) | Internet |
 | Ghép video | ffmpeg | Máy |
 
-Tiếng gốc được giữ lại ở mức nhỏ làm nền (chỉnh được), giọng Việt được canh theo thời gian từng câu; câu nào dài hơn khoảng trống sẽ được đọc nhanh hơn (tối đa 1.5x).
+Tiếng gốc được giữ lại ở mức nhỏ làm nền (chỉnh được), giọng đọc được canh theo thời gian từng câu; câu nào dài hơn khoảng trống sẽ được đọc nhanh hơn (tối đa 1.5x).
 
 ## Yêu cầu
 
@@ -104,14 +104,17 @@ Nếu máy chủ khởi động lại hoặc mạng chập chờn, trang web hi�
 
 ## Tuỳ chọn trên giao diện
 
-- **Ngôn ngữ gốc**: tự nhận diện / Trung / Anh
-- **Giọng đọc**: nữ (Hoài My) hoặc nam (Nam Minh)
+- **Ngôn ngữ đầu ra** (ô cạnh nút *Start dubbing*): Vietnamese / Chinese (Simplified) / Chinese (Traditional)
+- **Source language**: *Auto-detect* (mặc định, Whisper tự nhận ra ngôn ngữ) hoặc chọn hẳn một trong 97 ngôn ngữ. Video vốn đã cùng ngôn ngữ đầu ra thì không dịch, chỉ đọc lại
+- **Voice**: nữ hoặc nam (tên giọng đổi theo ngôn ngữ đầu ra)
 - **Chất lượng nhận dạng**: small (nhanh) / large-v3-turbo (mặc định) / large-v3 (tốt nhất)
 - **Công cụ dịch**: offline (NLLB, mặc định) hoặc Google Dịch — nếu Google chặn sẽ tự chuyển sang offline
 - **Âm lượng tiếng gốc**: 0–100%
 - **Đăng nhập YouTube qua**: không / Firefox / Chrome (chỉ cần khi bị YouTube chặn)
 
-Kết quả lưu trong thư mục `jobs/<mã>/`: `dubbed.mp4` (video lồng tiếng), `vi.srt`, `original.srt`.
+Kết quả lưu trong thư mục `jobs/<mã>/`: `dubbed.mp4` (video lồng tiếng), `vi.srt` (phụ đề bản dịch — tên file giữ nguyên kể cả khi dịch sang tiếng Trung), `original.srt`.
+
+Cùng một video có thể lồng tiếng cả sang tiếng Việt lẫn tiếng Trung; hai bản được lưu riêng.
 
 ## Lưu ý
 
