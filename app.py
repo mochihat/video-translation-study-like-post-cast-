@@ -562,8 +562,9 @@ def get_job(job_id):
     job = jobs.get(job_id) or abort(404)
     out = {**job, **with_video_state(job)}
     seg_file = JOBS_DIR / job_id / "segments.json"
-    if job["status"] == "done" and seg_file.exists():
-        out["segments"] = json.loads(seg_file.read_text("utf-8"))
+    # trang xem video làm mới mỗi 2,5 giây: lời thoại (vài trăm KB) chỉ gửi khi được hỏi
+    if job["status"] == "done" and request.args.get("segments") != "0":
+        out["segments"] = json.loads(seg_file.read_text("utf-8")) if seg_file.exists() else []
     return jsonify(out)
 
 

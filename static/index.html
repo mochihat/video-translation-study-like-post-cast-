@@ -465,7 +465,8 @@ function renderPlaylist(id) {
 // ---------- Trang xem / tiến độ một video ----------
 async function renderVideo(id) {
   let j;
-  try { j = await api("/api/jobs/" + id); } catch (e) {
+  const drawn = renderedKey?.startsWith(id + ":");  // đã vẽ rồi thì chỉ cần trạng thái, không tải lại lời thoại
+  try { j = await api(`/api/jobs/${id}${drawn ? "?segments=0" : ""}`); } catch (e) {
     // mất kết nối thì giữ nguyên trang, tự thử lại ở lần làm mới sau
     if (!e.offline) $("#view").innerHTML = '<a class="back" href="#">← Library</a><p>Video not found (it may have been deleted).</p>';
     return;
@@ -477,6 +478,7 @@ async function renderVideo(id) {
 
   if (j.status === "done") {
     if (renderedKey === key) { renderSide(pl, id); return; }
+    if (!j.segments) { renderedKey = null; return renderVideo(id); }  // vừa xong: tải kèm lời thoại để vẽ
     renderedKey = key;
     $("#view").innerHTML = `${back}
       <div class="watch"><div>
@@ -738,7 +740,10 @@ window.addEventListener("hashchange", async () => { renderedKey = null; $("#view
   bindEject();
   await refreshLib();
   route();
+  // tab đang ẩn (chuyển tab, tắt màn hình điện thoại) thì không làm mới, mở lại thì làm mới ngay
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshLib().then(route); });
   setInterval(async () => {
+    if (document.hidden) return;
     await refreshLib();
     if (!online) return;
     const h = location.hash.slice(1);
