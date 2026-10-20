@@ -192,6 +192,20 @@
   .opt input { margin-top:5px; }
   .opt .bar { margin-top:8px; max-width:360px; }
   #remoteCard svg { width:100%; height:auto; display:block; }
+
+  /* ---------- Livestream ---------- */
+  .live-embed, .live-video { position:relative; aspect-ratio:16/9; background:#000; border-radius:12px; overflow:hidden; }
+  .live-embed iframe, .live-video video { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .live-cap { margin-top:12px; padding:12px 16px; border-radius:12px; background:var(--brand-50); min-height:70px; }
+  .live-cap .tr { font-size:19px; font-weight:600; line-height:1.45; }
+  .live-cap .src { color:var(--muted); font-size:14px; margin-top:2px; }
+  .overlay-cap { position:absolute; left:5%; right:5%; bottom:60px; text-align:center; color:#fff; pointer-events:none;
+    font-size:clamp(15px, 2.4vw, 22px); font-weight:600; line-height:1.4; text-shadow:0 1px 3px #000, 0 0 10px #000; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+  .tabs button.on { background:var(--brand); color:#fff; border-color:var(--brand); }
+  .badge.live { color:#fff; background:#d4002a; }
+  .badge.live::before { animation:blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity:.2; } }
   .show-sm { display:none; }
 
   @media (max-width: 560px) {
@@ -214,7 +228,8 @@
 <header class="appbar"><div class="wrap">
   <a href="#" class="brand"><span class="logo">▶</span>
     <span><b id="appName">Video Dubbing</b><small id="appSub">Translate &amp; dub YouTube lectures</small></span></a>
-  <nav><a href="#settings" class="chip-link" id="storageLink">💾 Storage</a>
+  <nav><a href="#live" class="chip-link" id="liveLink">🔴 Live</a>
+    <a href="#settings" class="chip-link" id="storageLink">💾 Storage</a>
     <button class="ghost" id="ejectBtn" hidden title="Stop writing to the drive and eject it safely">⏏ Safely eject</button>
     <button class="ghost" id="langBtn" title="中文 / English">🌐 繁中</button></nav>
 </div></header>
@@ -322,6 +337,30 @@ const ZH = {
     "要安全退出{name}嗎？\n若此硬碟上有影片正在處理，會先停止，重新插入硬碟後再從頭處理。\n請記得停止播放此硬碟上的影片。",
   "Stopping writes and ejecting...": "正在停止寫入並退出…",
   "This video will be dubbed right after the current one.": "目前的影片完成後會立刻配音這部。",
+  // trang livestream
+  "🔴 Live": "🔴 直播", "Connecting…": "連線中…", "LIVE": "直播中", "Ended": "已結束", "Stopped": "已停止",
+  "🔴 Translate a livestream": "🔴 翻譯直播",
+  "Paste a YouTube livestream link. You get live subtitles right away, live dubbing about 30–60 s behind the stream, and the full recording is dubbed after the stream ends.":
+    "貼上 YouTube 直播連結。立即提供即時字幕，即時配音約比直播晚 30–60 秒，直播結束後會為完整錄影配音。",
+  "Paste a YouTube livestream link…": "貼上 YouTube 直播連結…", "Start": "開始",
+  "Dub the full recording after the stream ends": "直播結束後為完整錄影配音",
+  "The voice, translator and volume options from the home page are used. The dubbing queue pauses during the livestream and resumes automatically afterwards.":
+    "會使用首頁的語音、翻譯與音量選項。直播期間配音佇列會暫停，結束後自動繼續。",
+  "Connecting to the livestream...": "正在連線到直播…",
+  "Subtitles appear about 15–30 s after the speech in the YouTube player.": "字幕會比 YouTube 播放器中的語音晚約 15–30 秒出現。",
+  "Dubbed voice and subtitles, about 30–60 s behind the live broadcast.": "含配音與字幕，約比直播晚 30–60 秒。",
+  "Preparing the first dubbed segments…": "正在準備第一段配音…",
+  "This takes about 30 seconds after the stream connects.": "連上直播後約需 30 秒。",
+  "💬 Live subtitles": "💬 即時字幕", "🔊 Live dubbing": "🔊 即時配音", "■ Stop": "■ 停止", "New livestream": "新的直播",
+  "Live transcript": "直播逐字稿", "Stop translating this livestream?": "要停止翻譯這場直播嗎？", "Detecting language…": "正在偵測語言…",
+  "each {chunk} s segment takes {lag} s to process": "每段 {chunk} 秒需處理 {lag} 秒",
+  "⏸ The dubbing queue is paused and resumes after the livestream.": "⏸ 配音佇列已暫停，直播結束後會繼續。",
+  "The stream has ended. Waiting for YouTube to finish the recording, then it will be dubbed automatically.":
+    "直播已結束。正在等待 YouTube 完成錄影，之後會自動配音。",
+  "✅ The full recording was added to the queue and will be dubbed next.": "✅ 完整錄影已加入佇列，將接著配音。",
+  "The recording was not available within 6 hours — paste the link on the home page later.": "6 小時內未取得錄影 — 請稍後在首頁貼上連結。",
+  "Stopped. To dub the full recording, paste the link on the home page after the stream ends.": "已停止。若要為完整錄影配音，請在直播結束後於首頁貼上連結。",
+  "Waiting for speech…": "等待語音…", "Could not load the video player (needs internet).": "無法載入影片播放器（需要網路）。",
 };
 const ZH_STEPS = { download:"下載影片", transcribe:"語音辨識", translate:"翻譯", tts:"產生配音", mux:"合成影片" };
 const ZH_TARGETS = { vi:"越南語", zh:"中文（簡體）", "zh-TW":"中文（繁體）" };
@@ -358,6 +397,10 @@ const SERVER_ZH = [
   [/^Only queued videos can be prioritized$/, "只有排隊中的影片可以設為優先"],
   [/^PIN required$/, "需要輸入 PIN 碼"],
   [/^Incomplete copy: /, "複製不完整："],
+  [/^A livestream is already being translated — stop it first$/, "已有直播正在翻譯 — 請先停止"],
+  [/^This livestream has not started yet — start again when it is live$/, "直播尚未開始 — 請在開播後再試"],
+  [/^This video is not a livestream — paste it in the main box instead$/, "這不是直播影片 — 請貼到首頁的輸入框"],
+  [/^Paused while a livestream is being translated$/, "翻譯直播期間暫停"],
   [/^Paused to safely eject the drive — this video will restart when the drive is plugged back in$/, "為安全退出硬碟而暫停 — 重新插入硬碟後會從頭處理此影片"],
   [/ — paused, this video will restart when the drive is ready$/, " — 已暫停，硬碟就緒後會重新處理此影片"],
   [/, retrying in (\d+) minutes$/, "，$1 分鐘後重試"],
@@ -909,6 +952,165 @@ document.addEventListener("click", async e => {
   await refreshLib(); renderedKey = null; route();
 });
 
+// ---------- Dịch livestream ----------
+const LIVE = { id: null, lines: [], shown: 0, epoch0: 0, hls: null, key: null, form: false, tab: store.get("live-tab") || "subs" };
+const LIVE_BADGE = { connecting: ["queued", "Connecting…"], live: ["live", "LIVE"], ended: ["done", "Ended"],
+                     stopped: ["", "Stopped"], error: ["error", "Failed"] };
+const liveBusy = s => s && ["connecting", "live"].includes(s.status);
+
+function stopLivePlayer() {
+  LIVE.hls?.destroy(); LIVE.hls = null;
+}
+
+async function renderLive() {
+  let r;
+  try { r = await api(`/api/live?id=${LIVE.id || ""}&since=${LIVE.lines.length}`); } catch { return; }
+  if (location.hash !== "#live") return;
+  const s = r.session;
+  if (!s || (LIVE.form && !liveBusy(s))) return renderLiveForm();
+  LIVE.form = false;
+  if (s.id !== LIVE.id) { LIVE.id = s.id; LIVE.lines = []; stopLivePlayer(); }
+  LIVE.lines.push(...s.lines);
+  LIVE.epoch0 = s.epoch0;
+  // vẽ lại cả trang chỉ khi đổi phiên / đổi tab / bắt đầu có video lồng tiếng; còn lại chỉ cập nhật chữ
+  const key = [s.id, LIVE.tab, liveBusy(s), LIVE.tab === "dub" && s.segments > 0, UI].join(":");
+  if (key !== LIVE.key) { LIVE.key = key; drawLive(s); }
+  updateLive(s, r.queue_paused);
+}
+
+function renderLiveForm() {
+  if ($("#liveUrl")) return;  // đang hiện form (có thể đang gõ) -> không vẽ lại
+  stopLivePlayer();
+  const tg = store.get("opt:target") || "vi";
+  $("#view").innerHTML = `<a class="back" href="#">${t("← Library")}</a>
+    <div class="card hero">
+      <h2>${t("🔴 Translate a livestream")}</h2>
+      <p>${t("Paste a YouTube livestream link. You get live subtitles right away, live dubbing about 30–60 s behind the stream, and the full recording is dubbed after the stream ends.")}</p>
+      <div class="bar-input">
+        <input id="liveUrl" aria-label="${t("YouTube link")}" placeholder="${t("Paste a YouTube livestream link…")}">
+        <select id="liveTarget" class="target" aria-label="${t("Output language")}">${LANGS.targets.map(x =>
+          `<option value="${x.id}" ${x.id === tg ? "selected" : ""}>→ ${esc(targetName(x.id))}</option>`).join("")}</select>
+        <button id="liveGo">${t("Start")}</button>
+      </div>
+      <label class="check"><input type="checkbox" id="liveAfter" checked> ${t("Dub the full recording after the stream ends")}</label>
+      <span id="liveMsg" class="msg"></span>
+    </div>
+    <p class="muted">${t("The voice, translator and volume options from the home page are used. The dubbing queue pauses during the livestream and resumes automatically afterwards.")}</p>`;
+  $("#liveGo").onclick = async () => {
+    const btn = $("#liveGo"), msg = $("#liveMsg");
+    btn.disabled = true; msg.className = "msg"; msg.textContent = t("Connecting to the livestream...");
+    const opt = (k, d) => store.get("opt:" + k) ?? d;
+    try {
+      await api("/api/live", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+        url: $("#liveUrl").value, target: $("#liveTarget").value, dub_after: $("#liveAfter").checked,
+        voice: opt("voice", "female"), translator: opt("translator", "offline"), bg_volume: opt("bg", 25) / 100,
+        cookies: opt("cookies", "none") }) });
+      LIVE.form = false; LIVE.key = null; $("#view").innerHTML = "";
+      renderLive();
+    } catch (e) { msg.className = "msg err"; msg.textContent = e.message; btn.disabled = false; }
+  };
+}
+
+function drawLive(s) {
+  stopLivePlayer();
+  const pane = LIVE.tab === "subs"
+    ? `<div class="live-embed">${s.video_id ? `<iframe src="https://www.youtube.com/embed/${esc(s.video_id)}?autoplay=1&playsinline=1"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>` : ""}</div>
+       <div class="live-cap"><div class="tr" id="capTr"></div><div class="src" id="capSrc"></div></div>
+       <p class="muted" style="margin-bottom:0">${t("Subtitles appear about 15–30 s after the speech in the YouTube player.")}</p>`
+    : s.segments > 0
+      ? `<div class="live-video"><video id="livePlayer" controls autoplay playsinline></video><div class="overlay-cap" id="dubCap"></div></div>
+         <p class="muted" style="margin-bottom:0" id="dubNote">${t("Dubbed voice and subtitles, about 30–60 s behind the live broadcast.")}</p>`
+      : `<div class="noplay"><div style="font-size:36px">⏳</div><b>${t("Preparing the first dubbed segments…")}</b>
+         <span class="muted">${t("This takes about 30 seconds after the stream connects.")}</span></div>`;
+  $("#view").innerHTML = `<a class="back" href="#">${t("← Library")}</a>
+    <div class="card">
+      <div class="row"><h2 style="margin:0">${esc(s.title || s.url)}</h2><span class="badge" id="liveBadge"></span></div>
+      <p class="muted" style="margin:6px 0 0" id="liveInfo"></p>
+      <p id="liveNote" style="margin:6px 0 0"></p>
+      <div class="row" style="margin-top:12px">
+        <div class="tabs"><button class="ghost ${LIVE.tab === "subs" ? "on" : ""}" data-tab="subs">${t("💬 Live subtitles")}</button>
+          <button class="ghost ${LIVE.tab === "dub" ? "on" : ""}" data-tab="dub">${t("🔊 Live dubbing")}</button></div>
+        ${liveBusy(s) ? `<button class="ghost" id="liveStop">${t("■ Stop")}</button>` : `<button id="liveNew">${t("New livestream")}</button>`}
+      </div>
+    </div>
+    <div class="card">${pane}</div>
+    <div class="card"><h2>${t("Live transcript")}</h2><div class="seg-wrap" id="liveLines"><table></table></div></div>`;
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+    LIVE.tab = b.dataset.tab; store.set("live-tab", LIVE.tab); LIVE.key = null; renderLive();
+  });
+  if ($("#liveStop")) $("#liveStop").onclick = async () => {
+    if (!confirm(t("Stop translating this livestream?"))) return;
+    await api("/api/live/stop", { method:"POST" }); LIVE.key = null; renderLive();
+  };
+  if ($("#liveNew")) $("#liveNew").onclick = () => { LIVE.form = true; LIVE.key = null; $("#view").innerHTML = ""; renderLiveForm(); };
+  appendLiveLines(LIVE.lines, true);
+  LIVE.shown = LIVE.lines.length;
+  if ($("#livePlayer")) setupLivePlayer(s);
+}
+
+function appendLiveLines(lines, reset) {
+  const box = $("#liveLines"); if (!box) return;
+  const nearBottom = reset || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const rows = lines.map(l => `<tr><td class="time">${fmt(l.start)}</td><td>${esc(l.text)}</td><td>${esc(l.tr)}</td></tr>`).join("");
+  const table = box.querySelector("table");
+  if (reset) table.innerHTML = rows; else table.insertAdjacentHTML("beforeend", rows);
+  if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+function updateLive(s, queuePaused) {
+  if (!$("#liveBadge")) return;
+  const [cls, label] = LIVE_BADGE[s.status] || ["", s.status];
+  $("#liveBadge").className = "badge " + cls; $("#liveBadge").textContent = t(label);
+  const src = s.lang ? sourceName(s.lang) : t("Detecting language…");
+  $("#liveInfo").innerHTML = `🌐 ${esc(src)} → ${esc(targetName(s.target))}` +
+    (s.lag != null ? " · " + t("each {chunk} s segment takes {lag} s to process", { chunk: s.chunk, lag: s.lag }) : "");
+  const notes = [];
+  if (s.error) notes.push(`<span class="err">${esc(t("Error: {msg}", { msg: sv(s.error) }))}</span>`);
+  if (liveBusy(s) && queuePaused) notes.push(t("⏸ The dubbing queue is paused and resumes after the livestream."));
+  if (s.vod === "waiting") notes.push(t("The stream has ended. Waiting for YouTube to finish the recording, then it will be dubbed automatically."));
+  if (s.vod === "queued") notes.push(t("✅ The full recording was added to the queue and will be dubbed next."));
+  if (s.vod === "gave_up") notes.push(t("The recording was not available within 6 hours — paste the link on the home page later."));
+  if (s.status === "stopped" && s.dub_after) notes.push(t("Stopped. To dub the full recording, paste the link on the home page after the stream ends."));
+  $("#liveNote").innerHTML = notes.map(n => `<span class="muted">${n}</span>`).join("<br>");
+  // dòng mới: thêm vào bảng; phụ đề ở tab "Live subtitles" là câu mới nhất
+  appendLiveLines(LIVE.lines.slice(LIVE.shown), false);
+  LIVE.shown = LIVE.lines.length;
+  const last = LIVE.lines[LIVE.lines.length - 1];
+  if ($("#capTr")) { $("#capTr").textContent = last ? last.tr : t("Waiting for speech…"); $("#capSrc").textContent = last ? last.text : ""; }
+}
+
+function loadHls() {
+  if (window.Hls) return Promise.resolve();
+  return new Promise((ok, fail) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js";
+    sc.onload = ok; sc.onerror = fail; document.head.append(sc);
+  });
+}
+
+async function setupLivePlayer(s) {
+  const v = $("#livePlayer"), src = `/live/${s.id}/live.m3u8`;
+  if (window.MediaSource || !v.canPlayType("application/vnd.apple.mpegurl")) {
+    try { await loadHls(); } catch { $("#dubNote").textContent = t("Could not load the video player (needs internet)."); return; }
+    if (!document.body.contains(v)) return;
+    LIVE.hls = new Hls({ liveSyncDuration: 20, liveMaxLatencyDuration: 90 });
+    LIVE.hls.loadSource(src); LIVE.hls.attachMedia(v);
+  } else {
+    v.src = src;  // Safari trên iPhone phát HLS sẵn
+  }
+  v.play().catch(() => {});
+  // phụ đề khớp hình: đổi vị trí đang phát ra trục thời gian chung của phiên (giây tính từ đầu phiên)
+  const timeline = () => {
+    const d = LIVE.hls?.playingDate || (v.getStartDate && !isNaN(v.getStartDate()) ? new Date(v.getStartDate().getTime() + v.currentTime * 1000) : null);
+    return d ? d.getTime() / 1000 - LIVE.epoch0 : v.currentTime;
+  };
+  v.addEventListener("timeupdate", () => {
+    const tl = timeline(), line = LIVE.lines.find(l => tl >= l.start && tl < l.end + 0.6);
+    $("#dubCap").textContent = line ? line.tr : "";
+  });
+}
+
 // ---------- Đổi ngôn ngữ giao diện ----------
 function applyStatic() {
   document.documentElement.lang = UI === "zh-TW" ? "zh-Hant-TW" : "en";
@@ -916,6 +1118,7 @@ function applyStatic() {
   $("#appName").textContent = t("Video Dubbing");
   $("#appSub").textContent = t("Translate & dub YouTube lectures");
   $("#storageLink").textContent = t("💾 Storage");
+  $("#liveLink").textContent = t("🔴 Live");
   $("#ejectBtn").title = t("Stop writing to the drive and eject it safely");
   $("#connText").textContent = t("Lost connection to the server — reconnecting…");
   $("#connReload").textContent = t("Reload page");
@@ -939,6 +1142,7 @@ async function refreshLib() {
 async function route() {
   const h = location.hash.slice(1);
   if (h.startsWith("v=")) return renderVideo(h.slice(2));
+  if (h === "live") return renderLive();
   if (h === "settings") {  // vẽ cả trang 1 lần, sau đó chỉ cập nhật tiến độ chuyển video
     const full = renderedKey !== "settings";
     renderedKey = "settings";
@@ -950,7 +1154,7 @@ async function route() {
   renderLibrary();
 }
 
-window.addEventListener("hashchange", async () => { renderedKey = null; $("#view").innerHTML = ""; await refreshLib(); route(); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", async () => { stopLivePlayer(); LIVE.key = null; renderedKey = null; $("#view").innerHTML = ""; await refreshLib(); route(); window.scrollTo(0, 0); });
 
 (async () => {
   // máy chủ chưa chạy (vừa bật máy) thì chờ và thử lại

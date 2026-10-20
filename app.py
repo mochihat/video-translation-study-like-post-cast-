@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 
+import live
 import remote
 import storage
 from pipeline import LANGS, STEPS, TARGETS, cookie_opts, run_pipeline, transient_reason
@@ -106,6 +107,7 @@ def worker():
         if work_queue.empty():
             awake.off()
         work_queue.get()  # chỉ báo "có việc"; video làm tiếp theo chọn theo queue_order() để tính cả ưu tiên
+        wait_for_live()
         order = queue_order()
         if not order:  # đã bị xoá/huỷ hết
             continue
@@ -184,6 +186,15 @@ def worker():
         save(job)
         if not work_queue.empty():
             time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
+
+
+def wait_for_live():
+    """Đang dịch livestream thì chưa làm video kế tiếp, để card đồ hoạ theo kịp buổi live."""
+    while live.busy():
+        current["paused_until"] = time.time() + 10
+        current["pause_reason"] = "Paused while a livestream is being translated"
+        time.sleep(10)
+    current["paused_until"] = None
 
 
 def wait_for_storage(job):
@@ -577,6 +588,59 @@ def ejectable():
         if loc not in storage.held and part and part["mountpoint"]:
             out.append({"id": loc, "name": storage.describe(loc)})
     return out
+
+
+# ---------- Livestream ----------
+def queue_recording(sess):
+    """Live kết thúc và YouTube đã có bản ghi: lồng tiếng cả bản ghi, làm ngay sau video đang xử lý."""
+    settings = settings_of({**sess.settings, "language": sess.lang or "auto"})
+    job = find_existing(sess.video_id, settings) or new_job(sess.url, settings, sess.title, sess.video_id)
+    set_priority([job], True)
+    attach_to_playlists(job)
+
+
+@app.get("/api/live")
+def get_live():
+    s = live.session
+    # chỉ gửi phần lời thoại mới nếu trình duyệt đang xem đúng phiên này
+    since = request.args.get("since", 0, type=int) if s and request.args.get("id") == s.id else 0
+    return jsonify(session=s.state(since) if s else None,
+                   queue_paused=live.busy() and any(j["status"] == "queued" for j in list(jobs.values())))
+
+
+@app.post("/api/live")
+def start_live():
+    data = request.get_json(force=True)
+    url = (data.get("url") or "").strip()
+    if not url.startswith("http"):
+        return jsonify(error="Invalid YouTube link"), 400
+    settings = {**settings_of(data), "dub_after": bool(data.get("dub_after", True))}
+    try:
+        s = live.start(url, settings, queue_recording)
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(session=s.state())
+
+
+@app.post("/api/live/stop")
+def stop_live():
+    if live.session:
+        live.session.stop()
+    return jsonify(ok=True)
+
+
+@app.get("/live/<sid>/<name>")
+def live_files(sid, name):
+    s = live.session
+    if not s or s.id != sid or not (name == "live.m3u8" or (name.startswith("out_") and name.endswith(".ts"))):
+        abort(404)
+    resp = send_from_directory(s.dir, name)
+    if name.endswith(".m3u8"):
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+    else:
+        resp.headers["Content-Type"] = "video/mp2t"
+    return resp
 
 
 @app.get("/api/library")

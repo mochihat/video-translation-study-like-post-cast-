@@ -261,7 +261,8 @@ def translate_offline(segments, lang, target, log, progress):
         tokens = [[src] + sp.encode(t, out_type=str)[:400] + ["</s>"] for t in batch]
         res = model.translate_batch(tokens, target_prefix=[[TARGETS[target]["nllb"]]] * len(batch),
                                     beam_size=4, max_decoding_length=300)
-        out += [sp.decode(r.hypotheses[0][1:]) for r in res]
+        # "⁇" = chữ mô hình không có trong từ điển -> bỏ đi thay vì hiện ra phụ đề
+        out += [sp.decode(r.hypotheses[0][1:]).replace("⁇", "").strip() for r in res]
         progress(len(out) / len(segments))
     for s, vi in zip(segments, out):
         s["vi"] = vi
