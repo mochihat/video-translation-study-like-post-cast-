@@ -129,6 +129,9 @@
   .badge.error { color:var(--danger); background:var(--danger-50); }
   .badge.running { color:var(--warn); background:var(--warn-50); }
   .badge.queued { color:var(--brand); background:var(--brand-50); }
+  .badge.prio { color:#b45309; background:#fdf3e6; }
+  .badge.prio::before { display:none; }
+  button.ghost.mini { padding:3px 10px; font-size:12px; }
   @media (prefers-color-scheme: dark) { .badge.queued { color:var(--accent); } }
   .bar { height:6px; background:var(--line); border-radius:999px; overflow:hidden; }
   .bar > div { height:100%; background:var(--brand); border-radius:inherit; transition:width .4s; }
@@ -340,12 +343,18 @@ function flash(text) {
   document.body.append(el); setTimeout(() => el.remove(), 6000);
 }
 
+// vị trí trong hàng đợi (1 = làm tiếp theo) và nút ưu tiên
+const queuePos = id => (LIB.order || []).indexOf(id) + 1;
+const prioBtn = (j, mini) => `<button class="ghost prio-btn ${mini ? "mini" : ""}" data-id="${j.id}" data-on="${j.priority ? 0 : 1}"
+  title="${j.priority ? "Remove priority" : "Dub this right after the current video"}">${j.priority ? "✕ Unprioritize" : "⚡ Dub next"}</button>`;
+
 function tile(j) {
   const bar = j.status === "running" ? `<div class="bar"><div style="width:${progressOf(j)*100}%"></div></div>` : "";
   return `<a class="tile" href="#v=${j.id}">
     <div class="cover" style="background-image:url('${coverUrl(j)}')">${j.duration ? `<span class="dur">${fmt(j.duration)}</span>` : ""}${bar}</div>
     <div class="info"><div class="t">${esc(j.title)}</div>
-      <div class="meta"><span class="badge ${j.status}">${STATUS[j.status]}</span>${
+      <div class="meta"><span class="badge ${j.status}">${STATUS[j.status]}${j.status === "queued" && queuePos(j.id) ? " #" + queuePos(j.id) : ""}</span>${
+        j.status === "queued" ? (j.priority ? '<span class="badge prio">⚡ Priority</span>' : "") + prioBtn(j, true) : ""}${
         j.status === "done" && !j.video_ok ? `<span class="muted" title="The video is on ${esc(j.video_place)}">🔌 Plug in drive</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
@@ -424,6 +433,7 @@ function renderPlaylist(id) {
   const p = LIB.playlists.find(p => p.id === id);
   if (!p) { $("#view").innerHTML = '<a class="back" href="#">← Library</a><p>Playlist not found.</p>'; return; }
   const byId = Object.fromEntries(LIB.jobs.map(j => [j.id, j]));
+  const queuedIn = p.job_ids.map(x => byId[x]).filter(j => j?.status === "queued"), allPrio = queuedIn.every(j => j.priority);
   const emptyTile = (e, i) => `<div class="tile" style="opacity:.75;cursor:default">
     <div class="cover" style="background-image:url('${e.video_id ? `https://i.ytimg.com/vi/${e.video_id}/mqdefault.jpg` : ""}');filter:grayscale(1)"></div>
     <div class="info"><div class="t">${esc(e.title || "Deleted video")}</div>
@@ -435,7 +445,8 @@ function renderPlaylist(id) {
         <button class="ghost" id="syncPl" title="Add new videos, re-dub deleted ones and retry failed ones">Update from YouTube</button>
         <button class="ghost" id="delPl">Delete playlist</button></span></div>
       <p class="muted">${p.done}/${p.total} videos dubbed${p.settings?.target && p.settings.target !== "vi" ? ` into ${esc(targetName(p.settings.target))}` : ""}${p.failed ? ` · <span class="err">${p.failed} failed</span>` : ""}${p.missing ? ` · ${p.missing} deleted` : ""}
-        ${p.failed ? ' <button class="ghost" id="retryPl">Retry failed videos</button>' : ""}</p>
+        ${p.failed ? ' <button class="ghost" id="retryPl">Retry failed videos</button>' : ""}
+        ${queuedIn.length ? ` <button class="ghost" id="prioPl" data-on="${allPrio ? 0 : 1}">${allPrio ? "✕ Unprioritize playlist" : `⚡ Dub this playlist next (${queuedIn.length})`}</button>` : ""}</p>
       <div class="bar ok"><div style="width:${p.total ? p.done / p.total * 100 : 0}%"></div></div></div>
     <div class="lib">${p.entries.map((e, i) => byId[e.job_id] ? tile(byId[e.job_id]) : emptyTile(e, i)).join("")}</div>`;
   $("#delPl").onclick = async () => {
@@ -449,6 +460,13 @@ function renderPlaylist(id) {
       const r = await api(`/api/playlists/${id}/sync`, { method:"POST" });
       flash(r.added ? `Added ${r.added} videos to the queue.` : "The playlist is complete, nothing new.");
     } finally { await refreshLib(); renderPlaylist(id); }
+  };
+  if ($("#prioPl")) $("#prioPl").onclick = async e => {
+    const on = e.target.dataset.on === "1";
+    e.target.disabled = true;
+    const r = await api(`/api/playlists/${id}/priority`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on }) });
+    flash(on ? `${r.count} videos from this playlist will be dubbed right after the current video.` : "Priority removed.");
+    await refreshLib(); renderPlaylist(id);
   };
   if ($("#retryPl")) $("#retryPl").onclick = async () => {
     const r = await api(`/api/playlists/${id}/retry-failed`, { method:"POST" });
@@ -528,7 +546,8 @@ async function renderVideo(id) {
   const idx = STEPS.findIndex(s => s.id === j.step);
   $("#view").innerHTML = `${back}<div class="card">
     <div class="row"><h2 style="margin:0">${esc(j.title)}</h2><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
-    ${j.status === "queued" ? `<p class="muted">Waiting in the queue — videos are processed one at a time.</p>` : ""}
+    ${j.status === "queued" ? `<p class="muted">${queuePos(id) === 1 ? "<b>Next up</b>" : queuePos(id) ? `<b>#${queuePos(id)}</b> in the queue` : "Waiting in the queue"}
+      — videos are processed one at a time. ${j.priority ? '<span class="badge prio">⚡ Priority</span> ' : ""}${prioBtn(j)}</p>` : ""}
     <p class="muted" style="margin:6px 0 0">${langLine(j)}</p>
     <div class="steps">${STEPS.map((s, i) => {
       const cls = j.status === "error" && i === idx ? "" : i < idx ? "ok" : i === idx ? "active" : "";
@@ -711,6 +730,17 @@ function bindEject() {
     } finally { b.disabled = false; await refreshLib(); }
   };
 }
+
+// nút ưu tiên trên thẻ video nằm trong link <a> -> chặn mở trang video khi bấm nút
+document.addEventListener("click", async e => {
+  const b = e.target.closest(".prio-btn"); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const on = b.dataset.on === "1";
+  b.disabled = true;
+  await api(`/api/jobs/${b.dataset.id}/priority`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on }) });
+  flash(on ? "This video will be dubbed right after the current one." : "Priority removed.");
+  await refreshLib(); renderedKey = null; route();
+});
 
 // ---------- Điều hướng ----------
 async function refreshLib() {

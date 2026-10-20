@@ -105,10 +105,13 @@ def worker():
     while True:
         if work_queue.empty():
             awake.off()
-        job_id = work_queue.get()
-        job = jobs.get(job_id)
-        if not job or job["status"] != "queued":  # đã bị xoá/huỷ
+        work_queue.get()  # chỉ báo "có việc"; video làm tiếp theo chọn theo queue_order() để tính cả ưu tiên
+        order = queue_order()
+        if not order:  # đã bị xoá/huỷ hết
             continue
+        job = order[0]
+        job_id = job["id"]
+        job.pop("priority", None)
         awake.on()
         current["id"] = job_id
 
@@ -272,10 +275,29 @@ def find_failed(video_id):
     return next((j for j in jobs.values() if j.get("video_id") == video_id and j["status"] == "error"), None)
 
 
+def queue_order():
+    """Thứ tự làm các video đang chờ: video được ưu tiên trước (theo thứ tự bấm), còn lại theo thứ tự vào hàng đợi."""
+    waiting = [j for j in list(jobs.values()) if j["status"] == "queued"]
+    return sorted(waiting, key=lambda j: (j.get("priority") is None, j.get("priority") or 0,
+                                          j.get("queued_at", j["created"])))
+
+
+def set_priority(job_list, on):
+    now = time.time()
+    for i, job in enumerate(job_list):
+        if job["status"] != "queued":
+            continue
+        if on:
+            job["priority"] = now + i * 1e-3  # giữ đúng thứ tự trong playlist
+        else:
+            job.pop("priority", None)
+        save(job)
+
+
 def requeue(job, settings=None):
     if settings:
         job.update(settings)
-    job.update(status="queued", step=None, progress=0, logs=[])
+    job.update(status="queued", step=None, progress=0, logs=[], queued_at=time.time())
     job.pop("error", None)
     save(job)
     work_queue.put(job["id"])
@@ -318,7 +340,7 @@ def new_job(url, settings, title=None, video_id=None, playlist_id=None):
         "id": new_id(), "url": url, **settings,
         "status": "queued", "step": None, "progress": 0,
         "title": title or url, "video_id": video_id, "playlist_id": playlist_id,
-        "logs": [], "created": time.time(),
+        "logs": [], "created": time.time(), "queued_at": time.time(),
     }
     (JOBS_DIR / job["id"]).mkdir()
     jobs[job["id"]] = job
@@ -509,6 +531,25 @@ def redo_slot(pl_id, idx):
     return jsonify(job=light(job))
 
 
+@app.post("/api/jobs/<job_id>/priority")
+def job_priority(job_id):
+    """Ưu tiên: làm video này ngay sau video đang xử lý."""
+    job = jobs.get(job_id) or abort(404)
+    if job["status"] != "queued":
+        return jsonify(error="Only queued videos can be prioritized"), 400
+    set_priority([job], request.get_json(force=True).get("on", True))
+    return jsonify(ok=True)
+
+
+@app.post("/api/playlists/<pl_id>/priority")
+def playlist_priority(pl_id):
+    pl = playlists.get(pl_id) or abort(404)
+    items = [jobs[e["job_id"]] for e in pl["entries"] if e["job_id"] in jobs]
+    on = request.get_json(force=True).get("on", True)
+    set_priority(items, on)
+    return jsonify(count=sum(j["status"] == "queued" for j in items))
+
+
 @app.post("/api/playlists/<pl_id>/retry-failed")
 def retry_failed(pl_id):
     pl = playlists.get(pl_id) or abort(404)
@@ -554,6 +595,7 @@ def library():
         paused_until=current["paused_until"],
         pause_reason=current.get("pause_reason"),
         queued=sum(j["status"] == "queued" for j in jobs.values()),
+        order=[j["id"] for j in queue_order()],
     )
 
 
