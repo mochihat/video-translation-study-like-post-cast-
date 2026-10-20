@@ -365,7 +365,7 @@ def light(job):
 
 
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Enter PIN</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Enter PIN · 輸入 PIN 碼</title>
 <style>
  :root{--bg:#f5f6f8;--card:#fff;--text:#1d2330;--muted:#6b7385;--line:#e3e6ec;--accent:#d93025}
  @media (prefers-color-scheme: dark){:root{--bg:#14161b;--card:#1d2027;--text:#e8eaef;--muted:#9aa1b0;--line:#2d313b;--accent:#ff6b5e}}
@@ -375,10 +375,11 @@ LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
  button{margin-top:14px;width:100%;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px;font:inherit;font-weight:600}
  p{color:var(--muted);font-size:14px} .err{color:var(--accent)}
 </style></head><body><form method="post" action="/login">
-<h2 style="margin-top:0">🎬 Video Dubbing</h2>
+<h2 style="margin-top:0">🎬 Video Dubbing · 影片配音</h2>
 <p>Enter the PIN shown on the laptop<br>(💾 Storage → 📱 Watch on your phone)</p>
+<p>請輸入筆電上顯示的 PIN 碼<br>（💾 儲存位置 → 📱 用手機觀看）</p>
 <input name="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus required>
-%ERROR%<button>Open</button></form></body></html>"""
+%ERROR%<button>Open · 進入</button></form></body></html>"""
 
 
 @app.before_request
@@ -389,7 +390,8 @@ def guard():
         return None
     if not remote.settings()["enabled"] or not remote.is_private(addr):
         return ("Watching from a phone / other device is turned off. "
-                "Turn it on in the 💾 Storage page on the laptop."), 403
+                "Turn it on in the 💾 Storage page on the laptop.\n"
+                "已關閉手機／其他裝置觀看功能，請在筆電的「💾 儲存位置」頁面開啟。"), 403
     if request.cookies.get(remote.COOKIE) == remote.token():
         return None
     pin = request.form.get("pin") if request.method == "POST" and request.path == "/login" else request.args.get("pin")
@@ -398,7 +400,8 @@ def guard():
             resp = redirect("/")
             resp.set_cookie(remote.COOKIE, remote.token(), max_age=365 * 86400, httponly=True, samesite="Lax")
             return resp
-        msg = ("Too many wrong attempts — try again in 15 minutes." if remote.locked(addr) else "Wrong PIN.")
+        msg = ("Too many wrong attempts — try again in 15 minutes. · 錯誤次數過多，請 15 分鐘後再試。"
+               if remote.locked(addr) else "Wrong PIN. · PIN 碼錯誤。")
         return LOGIN_PAGE.replace("%ERROR%", f'<p class="err">{msg}</p>'), 401
     if request.path.startswith(("/api/", "/files/")):
         return jsonify(error="PIN required"), 401
