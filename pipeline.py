@@ -331,13 +331,17 @@ async def _tts_one(text, voice, mp3_path, sem):
     async with sem:
         for attempt in range(3):
             try:
-                await edge_tts.Communicate(text, voice).save(str(mp3_path))
+                # kết nối có lúc treo mãi không trả lời (không lỗi, không ngắt) -> giới hạn 60 giây mỗi câu
+                await asyncio.wait_for(edge_tts.Communicate(text, voice).save(str(mp3_path)), 60)
                 return
             except edge_tts.exceptions.NoAudioReceived:
                 mp3_path.unlink(missing_ok=True)  # câu này không đọc được, bỏ qua thay vì hỏng cả video
                 return
-            except Exception:
+            except Exception as e:
+                mp3_path.unlink(missing_ok=True)
                 if attempt == 2:
+                    if isinstance(e, asyncio.TimeoutError):  # "timed out" -> được coi là lỗi mạng tạm thời, chờ rồi thử lại
+                        raise RuntimeError("Voice service (Edge TTS) timed out") from e
                     raise
                 await asyncio.sleep(2)
 
