@@ -117,12 +117,28 @@ def find(uuid, fresh=False):
     return next((p for p in partitions(fresh) if p["uuid"] == uuid), None)
 
 
+FORCE_SCRIPT = BASE / "allow-ntfs-force.sh"
+
+
 def _mount_error_hint(part, msg):
     if part["fstype"] in ("ntfs", "ntfs3"):
+        if "not allowed" in msg:
+            return ("The drive was unplugged while in use (marked 'dirty'). To let the app reopen it automatically, "
+                    f"run once in a terminal: pkexec bash \"{FORCE_SCRIPT}\"")
         return ("Cannot open the NTFS drive — usually because it was not safely ejected or Windows Fast Startup "
-                "is on (the drive is marked 'dirty'). Plug it into Windows, run chkdsk and eject it safely; "
-                f"or on Linux run: pkexec ntfsfix -d {part['path']}")
+                "is on (the drive is marked 'dirty'). Plug it into Windows, run chkdsk and eject it safely.")
     return f"Cannot open the drive: {msg.strip()[-200:]}"
+
+
+def _udisks_mount(part, *opts):
+    return subprocess.run(["udisksctl", "mount", "-b", part["path"], "--no-user-interaction", *opts],
+                          capture_output=True, text=True)
+
+
+def _known(uuid):
+    """Ổ web đã dùng để lưu video (nơi lưu hiện tại hoặc từng lưu) -> được phép mở lại khi bị 'dirty'."""
+    cfg = load_config()
+    return uuid == cfg.get("location") or uuid in cfg.get("labels", {})
 
 
 def mountpoint(uuid, auto_mount=True):
@@ -139,8 +155,17 @@ def mountpoint(uuid, auto_mount=True):
     failed = _mount_fail.get(uuid)
     if failed and time.time() - failed[0] < 30:
         raise RuntimeError(failed[1])
-    r = subprocess.run(["udisksctl", "mount", "-b", part["path"], "--no-user-interaction"],
-                       capture_output=True, text=True)
+    r = _udisks_mount(part)
+    if r.returncode != 0 and part["fstype"] in ("ntfs", "ntfs3") and _known(uuid):
+        # ổ NTFS bị rút / mất kết nối khi đang mở thì bị đánh dấu "dirty" và ntfs3 không chịu mở.
+        # Tuỳ chọn force chỉ bỏ qua lời từ chối đó: ntfs3 vẫn đọc lại nhật ký NTFS như khi mở bình thường,
+        # không sửa / xoá gì trên ổ (khác với ntfsfix là xoá nhật ký).
+        forced = _udisks_mount(part, "-o", "force")
+        if forced.returncode == 0:
+            print(f"  Reopened {part['path']} (was not cleanly unmounted)", flush=True)
+            r = forced
+        elif "not allowed" in forced.stderr:
+            r = forced
     if r.returncode != 0:
         reason = _mount_error_hint(part, r.stderr)
         _mount_fail[uuid] = (time.time(), reason)

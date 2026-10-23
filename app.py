@@ -16,7 +16,7 @@ from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 import live
 import remote
 import storage
-from pipeline import LANGS, STEPS, TARGETS, cookie_opts, run_pipeline, transient_reason
+from pipeline import LANGS, STEPS, TARGETS, cookie_opts, kill_ffmpeg, run_pipeline, transient_reason
 
 BASE = Path(__file__).parent
 JOBS_DIR = BASE / "jobs"
@@ -68,6 +68,7 @@ def load_existing():
     # làm tiếp các video còn dở khi máy chủ bị tắt
     pending = sorted((j for j in jobs.values() if j["status"] in ("queued", "running")), key=lambda j: j["created"])
     for job in pending:
+        job.pop("restart", None)
         job.update(status="queued", step=None, progress=0)
         save(job)
         work_queue.put(job["id"])
@@ -116,6 +117,7 @@ def worker():
         job.pop("priority", None)
         awake.on()
         current["id"] = job_id
+        current["thread"] = threading.get_ident()
 
         def update(step=None, progress=None, log=None, **fields):
             with lock:
@@ -132,7 +134,15 @@ def worker():
             # đang tháo ổ an toàn -> dừng ghi ngay, video này sẽ làm lại khi cắm ổ
             if current.get("loc") in storage.held:
                 raise RuntimeError("Stopped to safely eject the drive")
+            if job.get("restart"):
+                raise RuntimeError("Restarted by user")
             update(**kw)
+
+        def nap(seconds):
+            """Chờ, nhưng dừng sớm nếu người dùng bấm Restart."""
+            end = time.time() + seconds
+            while time.time() < end and not job.get("restart"):
+                time.sleep(1)
 
         job["status"] = "running"
         job.pop("error", None)
@@ -150,9 +160,15 @@ def worker():
                 new_loc = storage.current()
                 finalize(job, workdir, new_loc if new_loc != loc and storage.check(new_loc)[0] else loc)
                 job["status"] = "done"
+                job.pop("restart", None)
                 break
             except Exception as e:
                 current["loc"] = None
+                if job.pop("restart", None):
+                    # nút Restart: làm lại video này từ đầu (chỉ thư mục tạm của nó bị dọn khi bắt đầu lại)
+                    attempt = 0
+                    update(step="download", progress=0, log="↻ Restarted by user — starting this video again from the beginning")
+                    continue
                 if loc in storage.held:
                     update(log="Paused to safely eject the drive — this video will restart when the drive is plugged back in")
                     continue
@@ -169,13 +185,16 @@ def worker():
                         update(log=f"{reason}, retrying in {wait} minutes")
                         current["paused_until"] = time.time() + wait * 60
                         current["pause_reason"] = reason
-                        time.sleep(wait * 60)
+                        nap(wait * 60)
                         current["paused_until"] = None
+                        if job.pop("restart", None):
+                            update(log="↻ Restarted by user — starting this video again from the beginning")
                         continue
                 elif attempt == 0:
                     attempt += 1
                     update(log=f"Error: {e} — retrying in 15 seconds")
-                    time.sleep(15)
+                    nap(15)
+                    job.pop("restart", None)
                     continue
                 job["status"] = "error"
                 job["error"] = str(e)
@@ -543,6 +562,18 @@ def redo_slot(pl_id, idx):
     e["job_id"] = job["id"]
     save_playlist(pl)
     return jsonify(job=light(job))
+
+
+@app.post("/api/jobs/<job_id>/restart")
+def restart_job(job_id):
+    """Video đang xử lý bị treo: dừng ngay và làm lại từ đầu.
+    Không xoá gì ngoài thư mục tạm của chính video này; video đã xong và dữ liệu khác trên ổ không bị đụng tới."""
+    job = jobs.get(job_id) or abort(404)
+    if job["status"] != "running" or current["id"] != job_id:
+        return jsonify(error="Only the video being processed can be restarted"), 400
+    job["restart"] = True
+    kill_ffmpeg(current.get("thread"))
+    return jsonify(ok=True)
 
 
 @app.post("/api/jobs/<job_id>/priority")

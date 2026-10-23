@@ -3,6 +3,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import threading
 import wave
 from pathlib import Path
 
@@ -70,11 +71,25 @@ def lang_name(code):
 _whisper_cache = {}
 
 
+_running = {}  # luồng -> tiến trình ffmpeg đang chạy, để nút Restart dừng được ngay
+
+
 def ffmpeg(*args):
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error", *args]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"ffmpeg error: {r.stderr.strip()[-500:]}")
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    _running[threading.get_ident()] = p
+    try:
+        _, err = p.communicate()
+    finally:
+        _running.pop(threading.get_ident(), None)
+    if p.returncode != 0:
+        raise RuntimeError(f"ffmpeg error: {err.strip()[-500:]}")
+
+
+def kill_ffmpeg(thread_id):
+    p = _running.get(thread_id)
+    if p and p.poll() is None:
+        p.kill()
 
 
 def read_wav(path):

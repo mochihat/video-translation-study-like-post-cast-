@@ -360,7 +360,12 @@ const ZH = {
   "✅ The full recording was added to the queue and will be dubbed next.": "✅ 完整錄影已加入佇列，將接著配音。",
   "The recording was not available within 6 hours — paste the link on the home page later.": "6 小時內未取得錄影 — 請稍後在首頁貼上連結。",
   "Stopped. To dub the full recording, paste the link on the home page after the stream ends.": "已停止。若要為完整錄影配音，請在直播結束後於首頁貼上連結。",
-  "Waiting for speech…": "等待語音…", "Could not load the video player (needs internet).": "無法載入影片播放器（需要網路）。",
+  "Waiting for speech…": "等待語音…",
+  "↻ Restart": "↻ 重新開始", "Restarting…": "重新開始中…",
+  "Stop this video and process it again from the beginning": "停止這部影片並從頭重新處理",
+  "Restart this video from the beginning?\nOnly its own temporary files are removed — finished videos and other data on your drive are not touched.":
+    "要從頭重新處理這部影片嗎？\n只會刪除這部影片自己的暫存檔 — 已完成的影片和硬碟上的其他資料都不會被動到。",
+  "The video will restart within a minute.": "影片將在一分鐘內重新開始。", "Could not load the video player (needs internet).": "無法載入影片播放器（需要網路）。",
 };
 const ZH_STEPS = { download:"下載影片", transcribe:"語音辨識", translate:"翻譯", tts:"產生配音", mux:"合成影片" };
 const ZH_TARGETS = { vi:"越南語", zh:"中文（簡體）", "zh-TW":"中文（繁體）" };
@@ -401,6 +406,12 @@ const SERVER_ZH = [
   [/^This livestream has not started yet — start again when it is live$/, "直播尚未開始 — 請在開播後再試"],
   [/^This video is not a livestream — paste it in the main box instead$/, "這不是直播影片 — 請貼到首頁的輸入框"],
   [/^Paused while a livestream is being translated$/, "翻譯直播期間暫停"],
+  [/^Only the video being processed can be restarted$/, "只有處理中的影片可以重新開始"],
+  [/^↻ Restarted by user — starting this video again from the beginning$/, "↻ 使用者重新開始 — 從頭處理此影片"],
+  [/The drive was unplugged while in use \(marked 'dirty'\)\. To let the app reopen it automatically, run once in a terminal: (.*)$/s,
+    "硬碟在使用中被拔除（被標記為 dirty）。若要讓程式自動重新開啟，請在終端機執行一次：$1"],
+  [/Cannot open the NTFS drive — usually because it was not safely ejected or Windows Fast Startup is on \(the drive is marked 'dirty'\)\. Plug it into Windows, run chkdsk and eject it safely\./,
+    "無法開啟 NTFS 硬碟 — 通常是因為未安全退出或 Windows 開啟了快速啟動（硬碟被標記為 dirty）。請接上 Windows 執行 chkdsk 後安全退出。"],
   [/^Paused to safely eject the drive — this video will restart when the drive is plugged back in$/, "為安全退出硬碟而暫停 — 重新插入硬碟後會從頭處理此影片"],
   [/ — paused, this video will restart when the drive is ready$/, " — 已暫停，硬碟就緒後會重新處理此影片"],
   [/, retrying in (\d+) minutes$/, "，$1 分鐘後重試"],
@@ -560,6 +571,11 @@ const queuePos = id => (LIB.order || []).indexOf(id) + 1;
 const prioBtn = (j, mini) => `<button class="ghost prio-btn ${mini ? "mini" : ""}" data-id="${j.id}" data-on="${j.priority ? 0 : 1}"
   title="${t(j.priority ? "Remove priority" : "Dub this right after the current video")}">${t(j.priority ? "✕ Unprioritize" : "⚡ Dub next")}</button>`;
 
+// nút làm lại từ đầu cho video đang xử lý (khi bị treo quá lâu)
+const restartBtn = (j, mini) => j.restart
+  ? `<button class="ghost ${mini ? "mini" : ""}" disabled>${t("Restarting…")}</button>`
+  : `<button class="ghost restart-btn ${mini ? "mini" : ""}" data-id="${j.id}" title="${t("Stop this video and process it again from the beginning")}">${t("↻ Restart")}</button>`;
+
 function tile(j) {
   const bar = j.status === "running" ? `<div class="bar"><div style="width:${progressOf(j)*100}%"></div></div>` : "";
   return `<a class="tile" href="#v=${j.id}">
@@ -567,6 +583,7 @@ function tile(j) {
     <div class="info"><div class="t">${esc(j.title)}</div>
       <div class="meta"><span class="badge ${j.status}">${statusName(j.status)}${j.status === "queued" && queuePos(j.id) ? " #" + queuePos(j.id) : ""}</span>${
         j.status === "queued" ? (j.priority ? `<span class="badge prio">${t("⚡ Priority")}</span>` : "") + prioBtn(j, true) : ""}${
+        j.status === "running" ? restartBtn(j, true) : ""}${
         j.status === "done" && !j.video_ok ? `<span class="muted" title="${t("The video is on {place}", { place: esc(sv(j.video_place)) })}">${t("🔌 Plug in drive")}</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
@@ -625,7 +642,7 @@ function renderBanner() {
   const cur = LIB.jobs.find(j => j.id === LIB.current);
   $("#banner").innerHTML = ejected + (cur ? `<div class="banner ${LIB.paused_until ? "warn" : ""}">
       <span class="ico">${LIB.paused_until ? "⏸" : "⏳"}</span>
-      <span style="flex:1;min-width:0">${t("Processing:")} <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a>
+      <span style="flex:1;min-width:0">${t("Processing:")} <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a> ${restartBtn(cur, true)}
       ${LIB.queued ? t(" — <b>{n}</b> more in queue", { n: LIB.queued }) : ""}
       ${!LIB.paused_until ? `<div class="bar"><div style="width:${progressOf(cur) * 100}%"></div></div>` : ""}
       ${LIB.paused_until ? `<br><span class="err">${t("{reason} — retrying automatically at {time}.", { reason: esc(sv(LIB.pause_reason)), time: timeStr(new Date(LIB.paused_until * 1000)) })}
@@ -768,6 +785,7 @@ async function renderVideo(id) {
     ${j.error ? `<p class="err">${t("Error: {msg}", { msg: esc(sv(j.error)) })}</p>` : ""}
     <pre>${esc(j.logs.map(l => l.replace(/^(\[[\d:]+\] )?(.*)$/s, (_, ts, m) => (ts || "") + sv(m))).join("\n")) || t("Waiting...")}</pre>
     ${j.status === "error" ? `<button id="retry">${t("Retry")}</button> ` : ""}
+    ${j.status === "running" ? restartBtn(j) + " " : ""}
     ${j.status !== "running" ? `<button class="ghost" id="del">${t(j.status === "queued" ? "Cancel" : "Delete")}</button>` : ""}
   </div>`;
   if ($("#retry")) $("#retry").onclick = async () => { await api(`/api/jobs/${id}/retry`, { method:"POST" }); renderedKey = null; };
@@ -1110,6 +1128,16 @@ async function setupLivePlayer(s) {
     $("#dubCap").textContent = line ? line.tr : "";
   });
 }
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest(".restart-btn"); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  if (!confirm(t("Restart this video from the beginning?\nOnly its own temporary files are removed — finished videos and other data on your drive are not touched."))) return;
+  b.disabled = true; b.textContent = t("Restarting…");
+  await api(`/api/jobs/${b.dataset.id}/restart`, { method:"POST" });
+  flash(t("The video will restart within a minute."));
+  await refreshLib(); renderedKey = null; route();
+});
 
 // ---------- Đổi ngôn ngữ giao diện ----------
 function applyStatic() {
