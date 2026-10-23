@@ -160,7 +160,8 @@ def mountpoint(uuid, auto_mount=True):
         # ổ NTFS bị rút / mất kết nối khi đang mở thì bị đánh dấu "dirty" và ntfs3 không chịu mở.
         # Tuỳ chọn force chỉ bỏ qua lời từ chối đó: ntfs3 vẫn đọc lại nhật ký NTFS như khi mở bình thường,
         # không sửa / xoá gì trên ổ (khác với ntfsfix là xoá nhật ký).
-        forced = _udisks_mount(part, "-o", "force")
+        # phải chỉ rõ driver ntfs3, nếu không udisks kiểm tra theo danh sách của driver ntfs cũ và từ chối "force"
+        forced = _udisks_mount(part, "-t", "ntfs3", "-o", "force")
         if forced.returncode == 0:
             print(f"  Reopened {part['path']} (was not cleanly unmounted)", flush=True)
             r = forced
