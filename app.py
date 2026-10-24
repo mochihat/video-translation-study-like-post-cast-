@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 import queue
 import random
 import shutil
@@ -802,40 +804,59 @@ def keep_local(job_id):
     return jsonify(with_video_state(job))
 
 
-move_state = {"running": False, "total": 0, "done": 0, "skipped": 0, "title": None, "error": None}
+move_state = {"running": False, "total": 0, "done": 0, "skipped": 0, "failed": 0, "failed_titles": [], "title": None, "error": None}
+
+
+def copy_verified(src, dst):
+    """Chép src -> dst rồi đọc lại dst, so SHA-256 với dữ liệu đã đọc từ src (chỉ đọc ổ nguồn một lần)."""
+    part = dst.with_name(dst.name + ".part")
+    h_src = hashlib.sha256()
+    with open(src, "rb") as fi, open(part, "wb") as fo:
+        while chunk := fi.read(4 << 20):
+            h_src.update(chunk)
+            fo.write(chunk)
+        fo.flush()
+        os.fsync(fo.fileno())
+    h_dst = hashlib.sha256()
+    with open(part, "rb") as f:
+        while chunk := f.read(4 << 20):
+            h_dst.update(chunk)
+    if h_src.digest() != h_dst.digest():
+        part.unlink(missing_ok=True)
+        raise RuntimeError("the copy does not match the original")
+    part.replace(dst)
 
 
 def move_videos(target):
-    """Chuyển các video đã xong sang nơi lưu mới (chép xong, kiểm tra kích thước rồi mới xoá bản cũ)."""
-    todo = [j for j in jobs.values() if j["status"] == "done" and j.get("video_at", "local") != target]
-    move_state.update(running=True, total=len(todo), done=0, skipped=0, title=None, error=None)
-    try:
-        for job in todo:
-            move_state["title"] = job["title"]
-            old_loc = job.get("video_at", "local")
-            try:
-                src = storage.root(old_loc) / job["id"] / "dubbed.mp4"
-            except RuntimeError:
-                src = None
-            if not src or not src.exists():
-                move_state["skipped"] += 1  # ổ cũ chưa cắm: để nguyên
-                continue
+    """Chuyển các video đã xong sang nơi lưu mới. Bản chép được kiểm tra từng byte trước khi dùng.
+    Bản gốc trên ổ ngoài được giữ nguyên làm dự phòng; chỉ bản gốc trên laptop mới bị xoá (để lấy lại chỗ trống).
+    Video nào đọc lỗi thì bỏ qua và giữ nguyên ở chỗ cũ, không làm dừng cả lượt chuyển."""
+    todo = [j for j in list(jobs.values()) if j["status"] == "done" and j.get("video_at", "local") != target]
+    move_state.update(running=True, total=len(todo), done=0, skipped=0, failed=0, failed_titles=[], title=None, error=None)
+    for job in todo:
+        move_state["title"] = job["title"]
+        old_loc = job.get("video_at", "local")
+        try:
+            src = storage.root(old_loc) / job["id"] / "dubbed.mp4"
+        except RuntimeError:
+            src = None
+        if not src or not src.exists():
+            move_state["skipped"] += 1  # ổ cũ chưa cắm: để nguyên
+            continue
+        try:
             dest = storage.final_dir(target, job["id"])
             dest.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest / "dubbed.mp4.part")
-            if (dest / "dubbed.mp4.part").stat().st_size != src.stat().st_size:
-                raise RuntimeError(f"Incomplete copy: {job['title']}")
-            (dest / "dubbed.mp4.part").replace(dest / "dubbed.mp4")
-            job["video_at"] = target
-            save(job)
-            if old_loc != "local":
-                shutil.rmtree(src.parent, ignore_errors=True)
-            elif target != "local":
-                src.unlink()
-            move_state["done"] += 1
-    except Exception as e:
-        traceback.print_exc()
-        move_state["error"] = str(e)
+            copy_verified(src, dest / "dubbed.mp4")
+        except Exception as e:
+            traceback.print_exc()
+            move_state["failed"] += 1
+            move_state["failed_titles"].append(job["title"])
+            continue
+        job["video_at"] = target
+        save(job)
+        if old_loc == "local" and target != "local":
+            src.unlink()
+        move_state["done"] += 1
     move_state.update(running=False, title=None)
 
 

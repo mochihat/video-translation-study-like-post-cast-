@@ -318,7 +318,10 @@ const ZH = {
   "Titles, covers, subtitles and transcripts always stay on the laptop, so the library still works with the drive unplugged.":
     "標題、封面、字幕與逐字稿一律保存在筆電上，因此拔除硬碟後仍可瀏覽影片庫。",
   "In use": "使用中", " · {free} free of {size}": " · 可用 {free}／共 {size}",
-  "Move {n} existing videos to this location (frees space on the old one)": "將現有的 {n} 部影片搬到此位置（釋放舊位置的空間）",
+  "Copy {n} existing videos to this location (each copy is verified; originals on external drives are kept)": "將現有的 {n} 部影片複製到此位置（每份都會核對；外接硬碟上的原檔會保留）",
+  "{n} videos could not be read and were left untouched on the old drive:": "有 {n} 部影片無法讀取，已原封不動留在舊硬碟：",
+  "The originals on the old drive are kept as a backup — delete the LongTiengVideos folder there yourself once you no longer need it.":
+    "舊硬碟上的原檔會保留作為備份 — 不再需要時請自行刪除該硬碟上的 LongTiengVideos 資料夾。",
   "Save": "儲存", "Rescan drives": "重新掃描硬碟", "Checking drive...": "正在檢查硬碟…",
   "Saved. New videos will be stored in the selected location.": "已儲存。新影片將存放在所選位置。",
   "📱 Watch on your phone": "📱 用手機觀看", "Turn off": "關閉", "Turn on": "開啟",
@@ -870,10 +873,12 @@ async function renderSettings(full) {
   if (location.hash !== "#settings") return;
   const mv = s.moving;
   const moveHtml = mv.running
-    ? `<p>${t("⏳ Moving video {i}/{n}: {title}", { i: mv.done + mv.skipped + 1, n: mv.total, title: esc(mv.title || "") })}</p>
-       <div class="bar ok"><div style="width:${mv.total ? (mv.done + mv.skipped) / mv.total * 100 : 0}%"></div></div>`
+    ? `<p>${t("⏳ Moving video {i}/{n}: {title}", { i: mv.done + mv.skipped + (mv.failed || 0) + 1, n: mv.total, title: esc(mv.title || "") })}</p>
+       <div class="bar ok"><div style="width:${mv.total ? (mv.done + mv.skipped + (mv.failed || 0)) / mv.total * 100 : 0}%"></div></div>`
     : mv.total ? `<p class="${mv.error ? "err" : "muted"}">${mv.error ? t("Error while moving: {msg}", { msg: esc(sv(mv.error)) })
-        : t("Moved {n} videos", { n: mv.done }) + (mv.skipped ? t(", skipped {n} (old drive not plugged in)", { n: mv.skipped }) : "") + (UI === "zh-TW" ? "。" : ".")}</p>` : "";
+        : t("Moved {n} videos", { n: mv.done }) + (mv.skipped ? t(", skipped {n} (old drive not plugged in)", { n: mv.skipped }) : "") + (UI === "zh-TW" ? "。" : ".")}</p>
+       ${mv.failed ? `<p class="err">${t("{n} videos could not be read and were left untouched on the old drive:", { n: mv.failed })}<br>${mv.failed_titles.map(esc).join("<br>")}</p>` : ""}
+       ${mv.done && !mv.running ? `<p class="muted">${t("The originals on the old drive are kept as a backup — delete the LongTiengVideos folder there yourself once you no longer need it.")}</p>` : ""}` : "";
   if (!full) { const m = $("#moveState"); if (m) m.innerHTML = moveHtml; return; }
 
   $("#view").innerHTML = `<a class="back" href="#">${t("← Library")}</a>
@@ -893,7 +898,7 @@ async function renderSettings(full) {
           </div></label>`;
       }).join("")}
       ${s.pending_move ? `<label class="check"><input type="checkbox" id="moveOld" checked>
-        ${t("Move {n} existing videos to this location (frees space on the old one)", { n: s.pending_move })}</label>` : ""}
+        ${t("Copy {n} existing videos to this location (each copy is verified; originals on external drives are kept)", { n: s.pending_move })}</label>` : ""}
       <div style="margin-top:14px"><button id="saveLoc">${t("Save")}</button> <button class="ghost" id="rescan">${t("Rescan drives")}</button>
         <span id="locMsg" class="msg"></span></div>
       <div id="moveState" style="margin-top:12px">${moveHtml}</div>
