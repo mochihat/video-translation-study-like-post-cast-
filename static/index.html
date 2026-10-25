@@ -364,7 +364,12 @@ const ZH = {
   "The recording was not available within 6 hours — paste the link on the home page later.": "6 小時內未取得錄影 — 請稍後在首頁貼上連結。",
   "Stopped. To dub the full recording, paste the link on the home page after the stream ends.": "已停止。若要為完整錄影配音，請在直播結束後於首頁貼上連結。",
   "Waiting for speech…": "等待語音…",
-  "↻ Restart": "↻ 重新開始", "Restarting…": "重新開始中…",
+  "↻ Restart": "↻ 重新開始", "Restarting…": "重新開始中…", "🗑 Delete": "🗑 刪除", "Deleting…": "刪除中…",
+  "Delete this video?\nTranslation stops and its temporary files are removed. Finished videos and other data on your drive are not touched.":
+    "要刪除這部影片嗎？\n翻譯會停止並刪除它的暫存檔。已完成的影片和硬碟上的其他資料都不會被動到。",
+  "Remove this video from the queue?": "要將這部影片移出佇列嗎？",
+  "The video is being deleted — translation stops within a minute.": "正在刪除影片 — 翻譯會在一分鐘內停止。",
+  "Removed from the queue.": "已移出佇列。",
   "Stop this video and process it again from the beginning": "停止這部影片並從頭重新處理",
   "Restart this video from the beginning?\nOnly its own temporary files are removed — finished videos and other data on your drive are not touched.":
     "要從頭重新處理這部影片嗎？\n只會刪除這部影片自己的暫存檔 — 已完成的影片和硬碟上的其他資料都不會被動到。",
@@ -579,6 +584,11 @@ const restartBtn = (j, mini) => j.restart
   ? `<button class="ghost ${mini ? "mini" : ""}" disabled>${t("Restarting…")}</button>`
   : `<button class="ghost restart-btn ${mini ? "mini" : ""}" data-id="${j.id}" title="${t("Stop this video and process it again from the beginning")}">${t("↻ Restart")}</button>`;
 
+// nút xoá video đang dịch / đang chờ
+const deleteBtn = (j, mini) => j.cancel
+  ? `<button class="ghost ${mini ? "mini" : ""}" disabled>${t("Deleting…")}</button>`
+  : `<button class="ghost delete-btn ${mini ? "mini" : ""}" data-id="${j.id}" data-running="${j.status === "running" ? 1 : 0}">${t("🗑 Delete")}</button>`;
+
 function tile(j) {
   const bar = j.status === "running" ? `<div class="bar"><div style="width:${progressOf(j)*100}%"></div></div>` : "";
   return `<a class="tile" href="#v=${j.id}">
@@ -587,6 +597,7 @@ function tile(j) {
       <div class="meta"><span class="badge ${j.status}">${statusName(j.status)}${j.status === "queued" && queuePos(j.id) ? " #" + queuePos(j.id) : ""}</span>${
         j.status === "queued" ? (j.priority ? `<span class="badge prio">${t("⚡ Priority")}</span>` : "") + prioBtn(j, true) : ""}${
         j.status === "running" ? restartBtn(j, true) : ""}${
+        j.status === "running" || j.status === "queued" ? deleteBtn(j, true) : ""}${
         j.status === "done" && !j.video_ok ? `<span class="muted" title="${t("The video is on {place}", { place: esc(sv(j.video_place)) })}">${t("🔌 Plug in drive")}</span>` : resumeLabel(j)}</div></div></a>`;
 }
 
@@ -645,7 +656,7 @@ function renderBanner() {
   const cur = LIB.jobs.find(j => j.id === LIB.current);
   $("#banner").innerHTML = ejected + (cur ? `<div class="banner ${LIB.paused_until ? "warn" : ""}">
       <span class="ico">${LIB.paused_until ? "⏸" : "⏳"}</span>
-      <span style="flex:1;min-width:0">${t("Processing:")} <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a> ${restartBtn(cur, true)}
+      <span style="flex:1;min-width:0">${t("Processing:")} <a href="#v=${cur.id}"><b>${esc(cur.title)}</b></a> ${restartBtn(cur, true)} ${deleteBtn(cur, true)}
       ${LIB.queued ? t(" — <b>{n}</b> more in queue", { n: LIB.queued }) : ""}
       ${!LIB.paused_until ? `<div class="bar"><div style="width:${progressOf(cur) * 100}%"></div></div>` : ""}
       ${LIB.paused_until ? `<br><span class="err">${t("{reason} — retrying automatically at {time}.", { reason: esc(sv(LIB.pause_reason)), time: timeStr(new Date(LIB.paused_until * 1000)) })}
@@ -788,7 +799,7 @@ async function renderVideo(id) {
     ${j.error ? `<p class="err">${t("Error: {msg}", { msg: esc(sv(j.error)) })}</p>` : ""}
     <pre>${esc(j.logs.map(l => l.replace(/^(\[[\d:]+\] )?(.*)$/s, (_, ts, m) => (ts || "") + sv(m))).join("\n")) || t("Waiting...")}</pre>
     ${j.status === "error" ? `<button id="retry">${t("Retry")}</button> ` : ""}
-    ${j.status === "running" ? restartBtn(j) + " " : ""}
+    ${j.status === "running" ? restartBtn(j) + " " + deleteBtn(j) : ""}
     ${j.status !== "running" ? `<button class="ghost" id="del">${t(j.status === "queued" ? "Cancel" : "Delete")}</button>` : ""}
   </div>`;
   if ($("#retry")) $("#retry").onclick = async () => { await api(`/api/jobs/${id}/retry`, { method:"POST" }); renderedKey = null; };
@@ -1133,6 +1144,20 @@ async function setupLivePlayer(s) {
     $("#dubCap").textContent = line ? line.tr : "";
   });
 }
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest(".delete-btn"); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const running = b.dataset.running === "1";
+  if (!confirm(t(running
+    ? "Delete this video?\nTranslation stops and its temporary files are removed. Finished videos and other data on your drive are not touched."
+    : "Remove this video from the queue?"))) return;
+  b.disabled = true; b.textContent = t("Deleting…");
+  await api("/api/jobs/" + b.dataset.id, { method:"DELETE" });
+  flash(t(running ? "The video is being deleted — translation stops within a minute." : "Removed from the queue."));
+  if (location.hash === "#v=" + b.dataset.id) location.hash = "";
+  await refreshLib(); renderedKey = null; route();
+});
 
 document.addEventListener("click", async e => {
   const b = e.target.closest(".restart-btn"); if (!b) return;

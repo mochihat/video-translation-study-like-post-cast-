@@ -71,6 +71,10 @@ def load_existing():
     pending = sorted((j for j in jobs.values() if j["status"] in ("queued", "running")), key=lambda j: j["created"])
     for job in pending:
         job.pop("restart", None)
+        if job.pop("cancel", None):  # đã bấm xoá ngay trước khi máy chủ tắt
+            job["status"] = "cancelled"
+            remove_job(job["id"])
+            continue
         job.update(status="queued", step=None, progress=0)
         save(job)
         work_queue.put(job["id"])
@@ -136,23 +140,26 @@ def worker():
             # đang tháo ổ an toàn -> dừng ghi ngay, video này sẽ làm lại khi cắm ổ
             if current.get("loc") in storage.held:
                 raise RuntimeError("Stopped to safely eject the drive")
+            if job.get("cancel"):
+                raise RuntimeError("Deleted by user")
             if job.get("restart"):
                 raise RuntimeError("Restarted by user")
             update(**kw)
 
         def nap(seconds):
-            """Chờ, nhưng dừng sớm nếu người dùng bấm Restart."""
+            """Chờ, nhưng dừng sớm nếu người dùng bấm Restart / Delete."""
             end = time.time() + seconds
-            while time.time() < end and not job.get("restart"):
+            while time.time() < end and not job.get("restart") and not job.get("cancel"):
                 time.sleep(1)
 
         job["status"] = "running"
         job.pop("error", None)
         attempt = 0
         waits = iter([5, 10, 20] + [30] * 12)  # phút chờ khi YouTube chặn (tổng ~7 giờ)
+        workdir = None
         while True:
             loc = wait_for_storage(job)
-            if job["status"] == "deleted":
+            if job["status"] == "deleted" or job.get("cancel"):
                 break
             try:
                 current["loc"] = loc
@@ -166,6 +173,8 @@ def worker():
                 break
             except Exception as e:
                 current["loc"] = None
+                if job.get("cancel"):
+                    break
                 if job.pop("restart", None):
                     # nút Restart: làm lại video này từ đầu (chỉ thư mục tạm của nó bị dọn khi bắt đầu lại)
                     attempt = 0
@@ -189,6 +198,8 @@ def worker():
                         current["pause_reason"] = reason
                         nap(wait * 60)
                         current["paused_until"] = None
+                        if job.get("cancel"):
+                            break
                         if job.pop("restart", None):
                             update(log="↻ Restarted by user — starting this video again from the beginning")
                         continue
@@ -196,14 +207,24 @@ def worker():
                     attempt += 1
                     update(log=f"Error: {e} — retrying in 15 seconds")
                     nap(15)
+                    if job.get("cancel"):
+                        break
                     job.pop("restart", None)
                     continue
                 job["status"] = "error"
                 job["error"] = str(e)
                 break
-        job["finished"] = time.time()
         current["id"] = None
         current["loc"] = None
+        if job.get("cancel"):
+            # nút Delete khi đang dịch: bỏ file tạm của video này rồi xoá nó khỏi thư viện
+            # (vị trí trong playlist vẫn giữ để có thể lồng tiếng lại sau)
+            if workdir:
+                shutil.rmtree(workdir, ignore_errors=True)
+            job["status"] = "cancelled"
+            remove_job(job_id)
+            continue
+        job["finished"] = time.time()
         save(job)
         if not work_queue.empty():
             time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
@@ -225,7 +246,7 @@ def wait_for_storage(job):
         storage.release_unplugged()
         loc = storage.current()
         ok, reason = storage.check(loc)
-        if ok or job["status"] == "deleted":
+        if ok or job["status"] == "deleted" or job.get("cancel"):
             current["paused_until"] = None
             return loc
         wait = 5 if loc in storage.held else 30
@@ -742,10 +763,14 @@ def remove_job(job_id):
 
 @app.delete("/api/jobs/<job_id>")
 def delete_job(job_id):
-    if job_id not in jobs:
-        abort(404)
-    if not remove_job(job_id):
-        return jsonify(error="Cannot delete while processing"), 400
+    job = jobs.get(job_id) or abort(404)
+    if job["status"] == "running":
+        # đang dịch: báo worker dừng (trong vòng ~1 phút), worker tự dọn file tạm rồi xoá video
+        job["cancel"] = True
+        if current["id"] == job_id:
+            kill_ffmpeg(current.get("thread"))
+        return jsonify(ok=True, pending=True)
+    remove_job(job_id)
     return jsonify(ok=True)
 
 
