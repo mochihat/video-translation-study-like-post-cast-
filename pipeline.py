@@ -210,26 +210,61 @@ def load_whisper(model_name, log):
     return model
 
 
+CHUNK_SEC = 20 * 60  # nhận dạng từng đoạn 20 phút -> RAM như nhau dù video dài 10 phút hay 6 tiếng
+CUT_SEARCH_SEC = 30  # cắt đoạn ở chỗ im lặng nhất trong 30 giây cuối để không cắt ngang câu
+
+
+def _wav_chunks(path, sr=16000):
+    """Đọc file wav 16kHz theo từng đoạn ~20 phút: trả (thời điểm bắt đầu, mảng float32, tổng thời lượng)."""
+    with wave.open(str(path), "rb") as w:
+        total = w.getnframes()
+        pos = 0
+        while pos < total:
+            n = min(CHUNK_SEC * sr, total - pos)
+            w.setpos(pos)
+            data = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float32) / 32768.0
+            if pos + n < total:
+                # tìm khung 0,5 giây yên lặng nhất trong 30 giây cuối của đoạn và cắt ở giữa khung đó
+                win, tail = sr // 2, data[-CUT_SEARCH_SEC * sr:]
+                energy = [float(np.mean(tail[k:k + win] ** 2)) for k in range(0, len(tail) - win, win // 2)]
+                cut = len(data) - len(tail) + int(np.argmin(energy)) * (win // 2) + win // 2
+                data = data[:cut]
+            yield pos / sr, data, total / sr
+            pos += len(data)
+
+
 def transcribe(audio_path, model_name, language, log, progress):
     model = load_whisper(model_name, log)
-    segments, info = model.transcribe(
-        read_wav(audio_path),  # truyền mảng 16kHz trực tiếp, tránh lỗi tương thích của thư viện av
-        language=None if language == "auto" else language,
-        vad_filter=True,
-        beam_size=5,
-        initial_prompt="以下是普通话的句子。" if language == "zh" else None,
-    )
-    if language == "auto":
-        log(f"Detected language: {lang_name(info.language)} ({info.language_probability:.0%} confidence)")
-    if info.language not in LANGS:
-        log(f"Warning: '{info.language}' is not supported by the offline translator, translation may be poor")
-    result = []
-    for seg in segments:
-        text = seg.text.strip()
-        if text:
-            result.append({"start": seg.start, "end": seg.end, "text": text})
-        progress(min(seg.end / max(info.duration, 1), 1.0))
-    return merge_short(result, sep="" if info.language in NO_SPACES else " "), info.duration, info.language
+    result, lang = [], None if language == "auto" else language
+    duration = 0.0
+    for offset, audio, duration in _wav_chunks(audio_path):
+        # truyền mảng 16kHz trực tiếp, tránh lỗi tương thích của thư viện av
+        segments, info = model.transcribe(
+            audio,
+            language=lang,  # ngôn ngữ phát hiện ở đoạn đầu được dùng cho cả video
+            vad_filter=True,
+            beam_size=5,
+            initial_prompt="以下是普通话的句子。" if lang == "zh" else None,
+        )
+        if lang is None:
+            lang = info.language
+            log(f"Detected language: {lang_name(lang)} ({info.language_probability:.0%} confidence)")
+            if lang not in LANGS:
+                log(f"Warning: '{lang}' is not supported by the offline translator, translation may be poor")
+        if duration > CHUNK_SEC:
+            log(f"Recognizing {fmt_hms(offset)}–{fmt_hms(offset + len(audio) / 16000)} of {fmt_hms(duration)}")
+        for seg in segments:
+            text = seg.text.strip()
+            if text:
+                result.append({"start": offset + seg.start, "end": offset + seg.end, "text": text})
+            progress(min((offset + seg.end) / max(duration, 1), 1.0))
+        del audio, segments
+    return merge_short(result, sep="" if lang in NO_SPACES else " "), duration, lang
+
+
+def fmt_hms(t):
+    t = int(t)
+    return f"{t // 3600}:{t // 60 % 60:02}:{t % 60:02}"
 
 
 def merge_short(segs, sep=" ", max_gap=0.4, max_len=10.0, min_len=1.2):
@@ -380,38 +415,52 @@ def synthesize(segments, voice, total_duration, workdir, log, progress):
     tts_dir.mkdir(exist_ok=True)
     asyncio.run(_tts_all(segments, voice, tts_dir, progress))
 
-    track = np.zeros(int((total_duration + 30) * SR), dtype=np.float32)
-    cursor = 0.0  # thời điểm câu trước kết thúc
-    sped_up = 0
-    for i, seg in enumerate(segments):
-        mp3 = tts_dir / f"{i:05}.mp3"
-        if not mp3.exists():
-            continue
-        wav_path = tts_dir / f"{i:05}.wav"
-        ffmpeg("-i", str(mp3), "-ac", "1", "-ar", str(SR), str(wav_path))
-        audio = read_wav(wav_path)
-        dur = len(audio) / SR
-
-        # Khoảng thời gian được phép nói: tới khi câu kế tiếp bắt đầu
-        next_start = segments[i + 1]["start"] if i + 1 < len(segments) else total_duration
-        slot = max(next_start - seg["start"], 0.5)
-        if dur > slot * 1.05:
-            tempo = min(dur / slot, 1.5)  # tăng tốc tối đa 1.5x để còn nghe rõ
-            fast = tts_dir / f"{i:05}_fast.wav"
-            ffmpeg("-i", str(wav_path), "-filter:a", f"atempo={tempo:.3f}", "-ar", str(SR), str(fast))
-            audio = read_wav(fast)
-            sped_up += 1
-
-        start = max(seg["start"], cursor)
-        a = int(start * SR)
-        if a + len(audio) > len(track):
-            track = np.concatenate([track, np.zeros(a + len(audio) - len(track), dtype=np.float32)])
-        track[a:a + len(audio)] += audio
-        cursor = start + len(audio) / SR
-
-    end = max(int(total_duration * SR), int(cursor * SR))
+    # ghi thẳng ra file theo thứ tự thời gian thay vì giữ cả track trong RAM
+    # (video 6 tiếng = 500 triệu mẫu, giữ trong RAM tốn tới ~8 GB khi lưu)
     dub = workdir / "dub.wav"
-    write_wav(dub, track[:end])
+    with wave.open(str(dub), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(SR)
+        written = 0  # số mẫu đã ghi
+
+        def pad_to(n):
+            nonlocal written
+            while written < n:
+                k = min(n - written, SR * 60)
+                out.writeframes(np.zeros(k, dtype=np.int16).tobytes())
+                written += k
+
+        cursor = 0.0  # thời điểm câu trước kết thúc
+        sped_up = 0
+        for i, seg in enumerate(segments):
+            mp3 = tts_dir / f"{i:05}.mp3"
+            if not mp3.exists():
+                continue
+            wav_path = tts_dir / f"{i:05}.wav"
+            ffmpeg("-i", str(mp3), "-ac", "1", "-ar", str(SR), str(wav_path))
+            audio = read_wav(wav_path)
+            dur = len(audio) / SR
+
+            # Khoảng thời gian được phép nói: tới khi câu kế tiếp bắt đầu
+            next_start = segments[i + 1]["start"] if i + 1 < len(segments) else total_duration
+            slot = max(next_start - seg["start"], 0.5)
+            if dur > slot * 1.05:
+                tempo = min(dur / slot, 1.5)  # tăng tốc tối đa 1.5x để còn nghe rõ
+                fast = tts_dir / f"{i:05}_fast.wav"
+                ffmpeg("-i", str(wav_path), "-filter:a", f"atempo={tempo:.3f}", "-ar", str(SR), str(fast))
+                audio = read_wav(fast)
+                sped_up += 1
+
+            start = max(seg["start"], cursor)
+            pad_to(int(start * SR))  # các câu không chồng lên nhau nên chỉ cần nối tiếp
+            out.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+            written += len(audio)
+            cursor = written / SR
+            for f in (wav_path, tts_dir / f"{i:05}_fast.wav"):
+                f.unlink(missing_ok=True)
+
+        pad_to(int(total_duration * SR))
     if sped_up:
         log(f"{sped_up}/{len(segments)} lines were read faster to fit the timing")
     return dub
