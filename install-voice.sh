@@ -24,4 +24,6 @@ for f in ('model_last.pt', 'config.json'):
 from vocos import Vocos
 Vocos.from_pretrained('charactr/vocos-mel-24khz')
 "
+echo "== Tạo bản mô hình gọn cho card 6 GB =="
+.venv-tts/bin/python slim_f5.py
 echo "Xong! Trên web chọn Voice engine: Natural AI voice."

@@ -372,6 +372,9 @@ const ZH = {
   "The recording was not available within 6 hours — paste the link on the home page later.": "6 小時內未取得錄影 — 請稍後在首頁貼上連結。",
   "Stopped. To dub the full recording, paste the link on the home page after the stream ends.": "已停止。若要為完整錄影配音，請在直播結束後於首頁貼上連結。",
   "Waiting for speech…": "等待語音…",
+  "Voice engine": "配音引擎", "Natural AI voice (F5) – slower": "自然 AI 語音（F5）－較慢", "Microsoft voice – fast": "Microsoft 語音－快速",
+  "The natural voice reads Vietnamese only — Chinese uses the Microsoft voice.": "自然語音只支援越南語，中文會使用 Microsoft 語音。",
+  "Pitch only applies to the Microsoft voice": "音高只適用於 Microsoft 語音",
   "Voice speed:": "語速：", "Voice pitch:": "音高：", "▶ Preview voice": "▶ 試聽聲音", "Loading…": "載入中…",
   "~{n} days": "約 {n} 天", "~{n} h": "約 {n} 小時", "Stopping…": "停止中…", "✕ Stop": "✕ 停止",
   "Stop re-translating — the current version is kept": "停止重新翻譯（保留目前版本）",
@@ -469,6 +472,11 @@ const SERVER_ZH = [
   [/^(\d+) lines start more than 0\.3 s late because the line before ran long$/, "有 $1 句因前一句過長而延後超過 0.3 秒"],
   [/^Warning: (\d+) lines have no voice — the voice service could not read them$/, "警告：有 $1 句沒有配音（語音服務無法朗讀）"],
   [/^Voice service unavailable(.*)$/s, "語音服務暫時無法使用$1"],
+  [/^Reading with the natural AI voice \(F5-TTS\)$/, "使用自然 AI 語音（F5-TTS）朗讀"],
+  [/^(\d+) lines are read with the Microsoft voice instead$/, "有 $1 句改用 Microsoft 語音"],
+  [/^Natural AI voice stopped \((.*)\), using the Microsoft voice$/s, "自然 AI 語音停止（$1），改用 Microsoft 語音"],
+  [/^Busy dubbing a video — the natural voice preview works when the queue is idle$/, "正在配音中，佇列空閒時才能試聽自然語音"],
+  [/^Natural AI voice failed, try the Microsoft voice$/, "自然 AI 語音失敗，請改用 Microsoft 語音"],
   [/^Re-translation stopped by user$/, "已由使用者停止重新翻譯"],
   [/^Re-translation stopped — the previous version is kept$/, "已停止重新翻譯，保留先前版本"],
   [/^Re-translation failed: (.*) — the previous version is kept$/s, "重新翻譯失敗：$1，保留先前版本"],
@@ -558,6 +566,9 @@ function formHtml() {
         <select id="model"><option value="small">${t("Fast (small)")}</option><option value="large-v3-turbo" selected>${t("Good (large-v3-turbo)")}</option><option value="large-v3">${t("Best, slow (large-v3)")}</option></select></div>
       <div><label for="translator">${t("Translator")}</label>
         <select id="translator"><option value="llm">${t("AI on this laptop (Qwen) – best, slower")}</option><option value="offline">${t("Offline on this laptop (NLLB)")}</option><option value="google">${t("Google Translate (needs internet)")}</option></select></div>
+      <div><label for="vengine">${t("Voice engine")}</label>
+        <select id="vengine">${LANGS.f5 ? `<option value="f5">${t("Natural AI voice (F5) – slower")}</option>` : ""}<option value="edge">${t("Microsoft voice – fast")}</option></select>
+        <span class="muted" id="vengineNote" style="font-size:12px"></span></div>
       <div><label for="vrate">${t("Voice speed:")} <span id="vratev">0%</span></label>
         <input id="vrate" type="range" min="-30" max="40" step="5" value="0"></div>
       <div><label for="vpitch">${t("Voice pitch:")} <span id="vpitchv">0 Hz</span></label>
@@ -574,7 +585,7 @@ function formHtml() {
 
 function bindForm() {
   // nhớ lựa chọn lần trước
-  for (const id of ["language","target","voice","model","translator","bg","cookies","vrate","vpitch"]) {
+  for (const id of ["language","target","voice","model","translator","bg","cookies","vrate","vpitch","vengine"]) {
     const v = store.get("opt:" + id); if (v !== null && [...($("#" + id).options || [v])].some(o => (o.value ?? o) === v)) $("#" + id).value = v;
     $("#" + id).addEventListener("change", e => store.set("opt:" + id, e.target.value));
   }
@@ -587,6 +598,14 @@ function bindForm() {
     }
   };
   voiceNames(); $("#target").addEventListener("change", voiceNames);
+  // F5 chỉ đọc tiếng Việt; cao độ chỉ chỉnh được với giọng Microsoft
+  const engineNote = () => {
+    const f5 = $("#vengine").value === "f5", f5ok = (LANGS.f5_targets || []).includes($("#target").value);
+    $("#vengineNote").textContent = f5 && !f5ok ? t("The natural voice reads Vietnamese only — Chinese uses the Microsoft voice.") : "";
+    $("#vpitch").disabled = f5 && f5ok;
+    $("#vpitch").title = $("#vpitch").disabled ? t("Pitch only applies to the Microsoft voice") : "";
+  };
+  engineNote(); $("#vengine").addEventListener("change", engineNote); $("#target").addEventListener("change", engineNote);
   $("#bgv").textContent = $("#bg").value + "%";
   $("#bg").oninput = e => $("#bgv").textContent = e.target.value + "%";
   const showVoice = () => { $("#vratev").textContent = (+$("#vrate").value > 0 ? "+" : "") + $("#vrate").value + "%";
@@ -613,7 +632,7 @@ function bindForm() {
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
         url: $("#url").value, playlist: isPl, language: $("#language").value, target: $("#target").value, voice: $("#voice").value,
         model: $("#model").value, translator: $("#translator").value, bg_volume: $("#bg").value / 100,
-        cookies: $("#cookies").value, voice_rate: +$("#vrate").value, voice_pitch: +$("#vpitch").value }) });
+        cookies: $("#cookies").value, voice_rate: +$("#vrate").value, voice_pitch: +$("#vpitch").value, voice_engine: $("#vengine").value }) });
       $("#url").value = ""; $("#plWrap").hidden = true;
       if (r.playlist) {
         location.hash = "p=" + r.playlist.id;
@@ -722,7 +741,8 @@ function renderLibrary() {
 // giọng đọc đang chọn trong phần tuỳ chọn (nhớ trong trình duyệt nên dùng được cả ở trang khác)
 const voiceParams = () => ({ target: $("#target")?.value || store.get("opt:target") || "vi",
   voice: $("#voice")?.value || store.get("opt:voice") || "female",
-  voice_rate: $("#vrate")?.value ?? store.get("opt:vrate") ?? 0, voice_pitch: $("#vpitch")?.value ?? store.get("opt:vpitch") ?? 0 });
+  voice_rate: $("#vrate")?.value ?? store.get("opt:vrate") ?? 0, voice_pitch: $("#vpitch")?.value ?? store.get("opt:vpitch") ?? 0,
+  voice_engine: $("#vengine")?.value || store.get("opt:vengine") || (LANGS.f5 ? "f5" : "edge") });
 
 // gửi yêu cầu dịch lại / dừng dịch lại (video, playlist hoặc cả thư viện)
 async function redoRequest(url, on, btn) {
@@ -888,7 +908,7 @@ async function renderVideo(id) {
     $("#redo").onclick = async () => {
       if (!confirm(t("Dub this video again with the same settings? (the current copy is kept)"))) return;
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, target, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies, voice_rate: j.voice_rate, voice_pitch: j.voice_pitch }) });
+        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, target, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies, voice_rate: j.voice_rate, voice_pitch: j.voice_pitch, voice_engine: j.voice_engine }) });
       location.hash = "v=" + r.job.id;
     };
     return;

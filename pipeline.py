@@ -592,21 +592,27 @@ def _audio_len(path):
         return float(c.duration or 0) / 1e6
 
 
-def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, pitch=0):
-    """rate: % nhanh/chậm hơn bình thường, pitch: Hz cao/thấp hơn (thanh trượt trong phần tuỳ chọn)."""
+def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, pitch=0, f5_ref=None):
+    """rate: % nhanh/chậm hơn bình thường, pitch: Hz cao/thấp hơn (thanh trượt trong phần tuỳ chọn).
+    f5_ref: wav giọng mẫu -> đọc bằng giọng AI tự nhiên F5-TTS; câu F5 đọc lỗi thì dùng giọng Edge."""
     tts_dir = workdir / "tts"
     tts_dir.mkdir(exist_ok=True)
     base = 1 + rate / 100
     pitch_s = f"{int(pitch):+d}Hz"
     avail = slots(segments, total_duration)
+    f5 = lambda i: tts_dir / f"{i:05}.f5.wav"
     mp3 = lambda i: tts_dir / f"{i:05}.mp3"
-    todo = [(seg["vi"], mp3(i), edge_rate(base)) for i, seg in enumerate(segments) if seg["vi"]]
-    asyncio.run(_tts_all(todo, voice, pitch_s, lambda p: progress(p * 0.75)))
+    if f5_ref:
+        synthesize_f5(segments, avail, base, f5_ref, tts_dir, log, lambda p: progress(p * 0.9))
+    todo = [(seg["vi"], mp3(i), edge_rate(base)) for i, seg in enumerate(segments) if seg["vi"] and not f5(i).exists()]
+    if f5_ref and todo:
+        log(f"{len(todo)} lines are read with the Microsoft voice instead")
+    asyncio.run(_tts_all(todo, voice, pitch_s, lambda p: progress((0.9 if f5_ref else 0) + p * (0.1 if f5_ref else 0.75))))
 
     # câu dài hơn chỗ trống: cho dịch vụ đọc lại nhanh hơn ngay từ đầu (tự nhiên hơn nhiều so với tua bằng ffmpeg)
     redo = []
     for i, seg in enumerate(segments):
-        if mp3(i).exists():
+        if mp3(i).exists() and not f5(i).exists():
             need = _audio_len(mp3(i)) / avail[i]
             if need > 1.1:  # lố ít thì lúc ghép tăng tốc nhẹ là đủ, khỏi đọc lại
                 speed = min(base * need * 1.03, max(MAX_SPEED, base))
@@ -620,7 +626,7 @@ def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, 
 
     # thử lại lần cuối, từng câu một, những câu dịch vụ vẫn không đọc được
     missing = [(seg["vi"], mp3(i), edge_rate(base)) for i, seg in enumerate(segments)
-               if seg["vi"] and any(c.isalnum() for c in seg["vi"]) and not mp3(i).exists()]
+               if seg["vi"] and any(c.isalnum() for c in seg["vi"]) and not mp3(i).exists() and not f5(i).exists()]
     if missing:
         time.sleep(5)
         asyncio.run(_tts_all(missing, voice, pitch_s, lambda p: None))
@@ -643,11 +649,12 @@ def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, 
                 written += k
 
         for i, seg in enumerate(segments):
-            if not mp3(i).exists():
+            src = f5(i) if f5(i).exists() else mp3(i)
+            if not src.exists():
                 silent += bool(seg["vi"]) and any(c.isalnum() for c in seg["vi"])
                 continue
             wav_path = tts_dir / f"{i:05}.wav"
-            ffmpeg("-i", str(mp3(i)), "-ac", "1", "-ar", str(SR), str(wav_path))
+            ffmpeg("-i", str(src), "-ac", "1", "-ar", str(SR), str(wav_path))
             audio = _trim_silence(read_wav(wav_path))
             start = max(seg["start"], written / SR)
             late += start > seg["start"] + 0.3
@@ -664,7 +671,8 @@ def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, 
             out.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
             written += len(audio)
             for f in tts_dir.glob(f"{i:05}*.wav"):
-                f.unlink(missing_ok=True)
+                if f != f5(i):
+                    f.unlink(missing_ok=True)
 
         pad_to(int(total_duration * SR))
     if redo:
@@ -675,6 +683,57 @@ def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, 
         log(f"Warning: {silent} lines have no voice — the voice service could not read them")
     progress(1)
     return dub
+
+
+# Giọng AI tự nhiên F5-TTS: chạy trong môi trường riêng .venv-tts (install-voice.sh), gọi bằng tiến trình con
+BASE_DIR = Path(__file__).parent
+F5_PY = BASE_DIR / ".venv-tts" / "bin" / "python"
+F5_MODEL = BASE_DIR / "voices" / "f5_vi_ema.safetensors"
+F5_TARGETS = ("vi",)  # mô hình chỉ đọc tiếng Việt
+
+
+def f5_available():
+    return F5_PY.exists() and F5_MODEL.exists()
+
+
+def f5_ref(voice):
+    """Giọng mẫu cho F5 theo lựa chọn Nữ / Nam."""
+    return BASE_DIR / "voices" / f"ref_{voice}.wav", (BASE_DIR / "voices" / "ref.txt").read_text("utf-8")
+
+
+def synthesize_f5(segments, avail, speed, ref, tts_dir, log, progress):
+    """Mỗi câu đọc vừa đúng khoảng thời gian của nó (F5 tự giãn/nén nhịp đọc, tự nhiên hơn tua)."""
+    ref_wav, ref_text = ref
+    items = [{"i": i, "text": seg["vi"], "out": str(tts_dir / f"{i:05}.f5.wav"),
+              "duration": avail[i], "speed": speed} for i, seg in enumerate(segments) if seg["vi"]]
+    if not items:
+        return
+    # nhường VRAM cho F5 (card 6 GB): bỏ Whisper / NLLB khỏi card, lúc sau tự nạp lại khi cần
+    _whisper_cache.clear()
+    _nllb.clear()
+    gc.collect()
+    job_file = tts_dir / "f5_job.json"
+    job_file.write_text(json.dumps({"ref_audio": str(ref_wav), "ref_text": ref_text, "nfe": 16,
+                                    "items": items}, ensure_ascii=False), "utf-8")
+    log("Reading with the natural AI voice (F5-TTS)")
+    p = subprocess.Popen([str(F5_PY), str(BASE_DIR / "tts_f5.py"), str(job_file)], cwd=BASE_DIR,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    _running[threading.get_ident()] = p  # nút Restart / Delete dừng được tiến trình này
+    err = []
+    threading.Thread(target=lambda: err.extend(p.stderr), daemon=True).start()
+    done = 0
+    try:
+        for line in p.stdout:
+            if line.startswith(("done ", "fail ")):
+                done += 1
+                progress(done / len(items))
+    finally:
+        p.wait()
+        _running.pop(threading.get_ident(), None)
+    if p.returncode != 0 and done < len(items):
+        tail = "".join(err)[-300:].strip()
+        log(f"Natural AI voice stopped ({tail.splitlines()[-1] if tail else p.returncode}), using the Microsoft voice")
+        print(tail, flush=True)
 
 
 def _trim_silence(audio, threshold=0.01):
@@ -757,8 +816,10 @@ def run_pipeline(job, workdir: Path, update):
     write_srt(workdir / "original.srt", segments, "text")
 
     update(step="tts", progress=0)
+    # video cũ (trước khi có lựa chọn này) cũng dùng giọng AI tự nhiên nếu đã cài
+    use_f5 = job.get("voice_engine", "f5") == "f5" and target in F5_TARGETS and f5_available()
     dub = synthesize(segments, TARGETS[target]["voices"][job["voice"]], duration, workdir, log, lambda p: update(progress=p),
-                     job.get("voice_rate", 0), job.get("voice_pitch", 0))
+                     job.get("voice_rate", 0), job.get("voice_pitch", 0), f5_ref(job["voice"]) if use_f5 else None)
 
     update(step="mux", progress=0)
     mux(video, dub, workdir / "vi.srt", job["bg_volume"], workdir / "dubbed.mp4", TARGETS[target]["sub"])

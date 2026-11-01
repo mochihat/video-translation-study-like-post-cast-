@@ -18,6 +18,7 @@ from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 import live
 import remote
 import storage
+import pipeline
 from pipeline import LANGS, STEPS, TARGETS, cookie_opts, kill_ffmpeg, run_pipeline, transient_reason
 
 BASE = Path(__file__).parent
@@ -426,7 +427,7 @@ def list_id_from_url(url):
 
 
 SETTING_DEFAULTS = {"language": "auto", "target": "vi", "voice": "female", "model": "large-v3-turbo",
-                    "translator": "llm", "bg_volume": 0.25, "cookies": "none", "voice_rate": 0, "voice_pitch": 0}
+                    "translator": "llm", "bg_volume": 0.25, "cookies": "none", "voice_rate": 0, "voice_pitch": 0, "voice_engine": "f5"}
 
 
 def settings_of(source):
@@ -447,7 +448,10 @@ def voice_opts(source):
             return int(min(max(float(source.get(k) or 0), lo), hi))
         except (TypeError, ValueError):
             return 0
-    return {"voice_rate": num("voice_rate", -30, 40), "voice_pitch": num("voice_pitch", -20, 20)}
+    # giọng AI tự nhiên (F5) khi đã cài bằng install-voice.sh, không thì giọng Microsoft Edge
+    engine = source.get("voice_engine") if source.get("voice_engine") in ("f5", "edge") else "f5"
+    return {"voice_rate": num("voice_rate", -30, 40), "voice_pitch": num("voice_pitch", -20, 20),
+            "voice_engine": engine if pipeline.f5_available() else "edge"}
 
 
 def find_existing(video_id, settings):
@@ -641,7 +645,8 @@ def steps():
 @app.get("/api/languages")
 def languages():
     return jsonify(sources=sorted(({"id": k, "name": n} for k, (_, n) in LANGS.items()), key=lambda l: l["name"]),
-                   targets=[{"id": k, "name": t["name"], "voices": t["voices"]} for k, t in TARGETS.items()])
+                   targets=[{"id": k, "name": t["name"], "voices": t["voices"]} for k, t in TARGETS.items()],
+                   f5=pipeline.f5_available(), f5_targets=list(pipeline.F5_TARGETS))
 
 
 @app.post("/api/jobs")
@@ -809,7 +814,31 @@ def redo_opts(data):
     out = voice_opts(data)
     if data.get("voice") in ("female", "male"):
         out["voice"] = data["voice"]
+    if "voice_engine" not in data:
+        out.pop("voice_engine")
     return out
+
+
+def f5_preview(voice, o):
+    """Nghe thử giọng AI tự nhiên: chạy F5 cho một câu mẫu (mất ~15 giây vì phải nạp mô hình)."""
+    import tempfile
+    if current["id"]:
+        return jsonify(error="Busy dubbing a video — the natural voice preview works when the queue is idle"), 409
+    ref_wav, ref_text = pipeline.f5_ref(voice)
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "s.wav"
+        job = Path(d) / "j.json"
+        job.write_text(json.dumps({"ref_audio": str(ref_wav), "ref_text": ref_text, "nfe": 16, "items": [{
+            "text": "Xin chào các bạn, hôm nay chúng ta sẽ tìm hiểu về thuật toán tìm đường đi ngắn nhất.",
+            "out": str(out), "duration": 5.0, "speed": 1 + o["voice_rate"] / 100}]}, ensure_ascii=False), "utf-8")
+        try:
+            subprocess.run([str(pipeline.F5_PY), str(BASE / "tts_f5.py"), str(job)], cwd=BASE,
+                           capture_output=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            pass
+        if not out.exists():
+            return jsonify(error="Natural AI voice failed, try the Microsoft voice"), 503
+        return app.response_class(out.read_bytes(), mimetype="audio/wav")
 
 
 @app.get("/api/voice-preview")
@@ -821,6 +850,8 @@ def voice_preview():
     target = request.args.get("target") if request.args.get("target") in TARGETS else "vi"
     voice = TARGETS[target]["voices"].get(request.args.get("voice"), TARGETS[target]["voices"]["female"])
     o = voice_opts(request.args)
+    if o["voice_engine"] == "f5" and target in pipeline.F5_TARGETS:
+        return f5_preview(request.args.get("voice") if request.args.get("voice") in ("female", "male") else "female", o)
     text = {"vi": "Xin chào các bạn, hôm nay chúng ta sẽ tìm hiểu về thuật toán tìm đường đi ngắn nhất.",
             "zh": "大家好，今天我们来学习最短路径算法。", "zh-TW": "大家好，今天我們來學習最短路徑演算法。"}[target]
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
