@@ -640,11 +640,21 @@ def run_pipeline(job, workdir: Path, update):
     update(title=info.get("title"), video_id=info.get("id"), duration=info.get("duration"))
 
     update(step="transcribe", progress=0)
-    audio16 = workdir / "audio16k.wav"
-    ffmpeg("-i", str(video), "-vn", "-ac", "1", "-ar", "16000", str(audio16))
-    segments, duration, lang = transcribe(
-        audio16, job["model"], job["language"], log, lambda p: update(progress=p)
-    )
+    if job.get("reuse_segments"):
+        # dịch lại video đã lồng tiếng: dùng lại lời thoại đã nhận dạng lần trước, bỏ qua Whisper
+        old = json.loads(Path(job["reuse_segments"]).read_text("utf-8"))
+        segments = [{"start": x["start"], "end": x["end"], "text": x["text"]} for x in old]
+        lang = job.get("source_lang") or (job["language"] if job.get("language", "auto") != "auto" else None) \
+            or ("zh" if CJK.search("".join(x["text"] for x in segments[:50])) else "en")
+        duration = float(info.get("duration") or (segments[-1]["end"] if segments else 0))
+        log(f"Reusing the recognized speech from the previous dub ({len(segments)} lines)")
+        update(progress=1)
+    else:
+        audio16 = workdir / "audio16k.wav"
+        ffmpeg("-i", str(video), "-vn", "-ac", "1", "-ar", "16000", str(audio16))
+        segments, duration, lang = transcribe(
+            audio16, job["model"], job["language"], log, lambda p: update(progress=p)
+        )
     if not segments:
         raise RuntimeError("No speech was recognized in this video")
     update(source_lang=lang)

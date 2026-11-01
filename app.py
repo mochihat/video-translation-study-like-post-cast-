@@ -80,6 +80,11 @@ def load_existing():
         work_queue.put(job["id"])
     if pending:
         print(f"  Resuming {len(pending)} unfinished videos")
+    redo = sorted((j for j in jobs.values() if j["status"] == "done" and j.get("redo")), key=lambda j: j["redo"]["queued_at"])
+    for job in redo:
+        job["redo"] = {"state": "queued", "queued_at": job["redo"]["queued_at"]}
+        save(job)
+        work_queue.put(job["id"])
 
 
 class KeepAwake:
@@ -119,6 +124,9 @@ def worker():
         if not order:  # đã bị xoá/huỷ hết
             continue
         job = order[0]
+        if job["status"] == "done":
+            run_redo(job)
+            continue
         job_id = job["id"]
         job.pop("priority", None)
         awake.on()
@@ -230,6 +238,124 @@ def worker():
             time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
 
 
+def run_redo(job):
+    """Dịch lại video đã xong bằng AI (Qwen). Dùng lại lời thoại đã nhận dạng nên bỏ qua Whisper;
+    video vẫn ở trạng thái "done" nên bản cũ xem được bình thường cho tới khi bản mới thay vào."""
+    job_id, redo = job["id"], job["redo"]
+    redo["state"] = "running"
+    awake.on()
+    current["id"] = job_id
+    current["thread"] = threading.get_ident()
+
+    def update(step=None, progress=None, log=None, **fields):
+        with lock:
+            if step:
+                job["step"] = step
+            if progress is not None:
+                job["progress"] = round(progress, 3)
+            job.update({k: v for k, v in fields.items() if v is not None})
+            if log:
+                job["logs"].append(f"[{time.strftime('%H:%M:%S')}] {log}")
+            save(job)
+
+    def report(**kw):
+        if current.get("loc") in storage.held:
+            raise RuntimeError("Stopped to safely eject the drive")
+        if job.get("cancel") or redo.get("stop"):
+            raise RuntimeError("Re-translation stopped by user")
+        update(**kw)
+
+    settings = {**job, "translator": "llm", "target": job.get("target") or "vi"}
+    seg_file = JOBS_DIR / job_id / "segments.json"
+    if seg_file.exists():
+        settings["reuse_segments"] = str(seg_file)
+    update(step="download", progress=0, log="🔁 Re-translating with AI — the current version stays watchable until the new one is ready")
+    workdir, loc = None, None
+    try:
+        loc = wait_for_storage(job)
+        if job.get("cancel") or redo.get("stop"):
+            raise RuntimeError("Re-translation stopped by user")
+        current["loc"] = loc
+        workdir = fresh_workdir(loc, job_id)
+        run_pipeline(settings, workdir, report)
+        # thay đúng chỗ bản cũ đang nằm (nếu ổ đó đang cắm), để không sót bản cũ trên ổ khác
+        old = job.get("video_at", "local")
+        finalize(job, workdir, old if storage.check(old)[0] else loc)
+        local = JOBS_DIR / job_id / "dubbed.mp4"
+        if job["video_at"] != "local" and local.exists():  # bản chép trên laptop cũng thay bằng bản mới
+            shutil.copy2(storage.final_dir(job["video_at"], job_id) / "dubbed.mp4", local.with_suffix(".part"))
+            local.with_suffix(".part").replace(local)
+        job.update(translator="llm", target=settings["target"], finished=time.time())
+        job.pop("redo", None)
+        job.pop("redo_error", None)
+        update(progress=1, log="✓ Re-translated with AI")
+    except Exception as e:
+        stopped = job.get("cancel") or redo.get("stop")
+        reason = transient_reason(e) or (loc and (loc in storage.held or not storage.check(loc)[0]) and "Drive not ready")
+        redo["tries"] = redo.get("tries", 0) + 1
+        if not stopped and reason and redo["tries"] <= 8:
+            # YouTube chặn / mất mạng / ổ bị rút: để lại trong hàng đợi, thử lại sau
+            redo["state"] = "queued"
+            redo["queued_at"] = time.time()
+            update(log=f"{reason} — re-translation will try again later")
+            work_queue.put(job_id)
+            if transient_reason(e):
+                current["paused_until"] = time.time() + 600
+                current["pause_reason"] = reason
+                end = time.time() + 600
+                while time.time() < end and not job.get("cancel") and not redo.get("stop"):
+                    time.sleep(1)
+                current["paused_until"] = None
+        else:
+            if not stopped:
+                traceback.print_exc()
+                job["redo_error"] = str(e)
+            job.pop("redo", None)
+            update(log="Re-translation stopped — the previous version is kept" if stopped
+                   else f"Re-translation failed: {e} — the previous version is kept")
+        if workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+    finally:
+        current["id"] = None
+        current["loc"] = None
+    if job.get("cancel"):  # bấm Delete trong lúc đang dịch lại -> xoá video như bình thường
+        job.pop("redo", None)
+        remove_job(job_id)
+        return
+    save(job)
+    if not work_queue.empty():
+        time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
+
+
+def queue_redo(job_list):
+    """Đưa video đã xong vào hàng đợi dịch lại bằng AI (bỏ qua video đang dịch lại)."""
+    n, now = 0, time.time()
+    for i, job in enumerate(job_list):
+        if job["status"] != "done" or redo_state(job):
+            continue
+        job["redo"] = {"state": "queued", "queued_at": now + i * 1e-3}  # giữ đúng thứ tự trong playlist
+        job.pop("redo_error", None)
+        save(job)
+        work_queue.put(job["id"])
+        n += 1
+    return n
+
+
+def stop_redo(job_list):
+    n = 0
+    for job in job_list:
+        st = redo_state(job)
+        if st == "queued":
+            job.pop("redo", None)
+            save(job)
+            n += 1
+        elif st == "running":
+            job["redo"]["stop"] = True
+            kill_ffmpeg(current.get("thread"))
+            n += 1
+    return n
+
+
 def wait_for_live():
     """Đang dịch livestream thì chưa làm video kế tiếp, để card đồ hoạ theo kịp buổi live."""
     while live.busy():
@@ -331,8 +457,16 @@ def find_failed(video_id):
 def queue_order():
     """Thứ tự làm các video đang chờ: video được ưu tiên trước (theo thứ tự bấm), còn lại theo thứ tự vào hàng đợi."""
     waiting = [j for j in list(jobs.values()) if j["status"] == "queued"]
+    # video đã xong chờ dịch lại bằng AI: làm sau mọi video mới
+    redo = [j for j in list(jobs.values()) if redo_state(j) == "queued"]
     return sorted(waiting, key=lambda j: (j.get("priority") is None, j.get("priority") or 0,
-                                          j.get("queued_at", j["created"])))
+                                          j.get("queued_at", j["created"]))) + \
+        sorted(redo, key=lambda j: j["redo"]["queued_at"])
+
+
+def redo_state(job):
+    """Trạng thái dịch lại bằng AI của video đã xong: None / "queued" / "running"."""
+    return (job.get("redo") or {}).get("state") if job["status"] == "done" else None
 
 
 def set_priority(job_list, on):
@@ -618,6 +752,44 @@ def playlist_priority(pl_id):
     return jsonify(count=sum(j["status"] == "queued" for j in items))
 
 
+@app.post("/api/jobs/<job_id>/retranslate")
+def job_retranslate(job_id):
+    """Dịch lại video đã xong bằng AI ({"on": false} = huỷ)."""
+    job = jobs.get(job_id) or abort(404)
+    if job["status"] != "done":
+        return jsonify(error="Only finished videos can be re-translated"), 400
+    on = request.get_json(force=True).get("on", True)
+    return jsonify(count=queue_redo([job]) if on else stop_redo([job]))
+
+
+def needs_ai(job):
+    return job["status"] == "done" and job.get("translator") != "llm" and not redo_state(job)
+
+
+@app.post("/api/playlists/<pl_id>/retranslate")
+def playlist_retranslate(pl_id):
+    pl = playlists.get(pl_id) or abort(404)
+    items = [jobs[e["job_id"]] for e in pl["entries"] if e["job_id"] in jobs]
+    if request.get_json(force=True).get("on", True):
+        return jsonify(count=queue_redo([j for j in items if needs_ai(j)]))
+    return jsonify(count=stop_redo(items))
+
+
+@app.post("/api/retranslate")
+def library_retranslate():
+    """Cả thư viện: theo thứ tự playlist rồi tới video lẻ."""
+    if not request.get_json(force=True).get("on", True):
+        return jsonify(count=stop_redo(list(jobs.values())))
+    ordered, seen = [], set()
+    for pl in sorted(playlists.values(), key=lambda p: p["created"]):
+        for e in pl["entries"]:
+            if e["job_id"] in jobs and e["job_id"] not in seen:
+                seen.add(e["job_id"])
+                ordered.append(jobs[e["job_id"]])
+    ordered += sorted((j for j in jobs.values() if j["id"] not in seen), key=lambda j: j["created"])
+    return jsonify(count=queue_redo([j for j in ordered if needs_ai(j)]))
+
+
 @app.post("/api/playlists/<pl_id>/retry-failed")
 def retry_failed(pl_id):
     pl = playlists.get(pl_id) or abort(404)
@@ -716,6 +888,9 @@ def library():
         paused_until=current["paused_until"],
         pause_reason=current.get("pause_reason"),
         queued=sum(j["status"] == "queued" for j in jobs.values()),
+        redo_queued=sum(redo_state(j) == "queued" for j in jobs.values()),
+        need_ai=sum(needs_ai(j) for j in jobs.values()),
+        need_ai_hours=round(sum(j.get("duration") or 0 for j in jobs.values() if needs_ai(j)) / 3600, 1),
         order=[j["id"] for j in queue_order()],
     )
 
@@ -764,7 +939,7 @@ def remove_job(job_id):
 @app.delete("/api/jobs/<job_id>")
 def delete_job(job_id):
     job = jobs.get(job_id) or abort(404)
-    if job["status"] == "running":
+    if job["status"] == "running" or redo_state(job) == "running":
         # đang dịch: báo worker dừng (trong vòng ~1 phút), worker tự dọn file tạm rồi xoá video
         job["cancel"] = True
         if current["id"] == job_id:
@@ -856,7 +1031,8 @@ def move_videos(target):
     """Chuyển các video đã xong sang nơi lưu mới. Bản chép được kiểm tra từng byte trước khi dùng.
     Bản gốc trên ổ ngoài được giữ nguyên làm dự phòng; chỉ bản gốc trên laptop mới bị xoá (để lấy lại chỗ trống).
     Video nào đọc lỗi thì bỏ qua và giữ nguyên ở chỗ cũ, không làm dừng cả lượt chuyển."""
-    todo = [j for j in list(jobs.values()) if j["status"] == "done" and j.get("video_at", "local") != target]
+    todo = [j for j in list(jobs.values()) if j["status"] == "done" and j.get("video_at", "local") != target
+            and redo_state(j) != "running"]
     move_state.update(running=True, total=len(todo), done=0, skipped=0, failed=0, failed_titles=[], title=None, error=None)
     for job in todo:
         move_state["title"] = job["title"]
