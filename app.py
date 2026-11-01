@@ -82,7 +82,7 @@ def load_existing():
         print(f"  Resuming {len(pending)} unfinished videos")
     redo = sorted((j for j in jobs.values() if j["status"] == "done" and j.get("redo")), key=lambda j: j["redo"]["queued_at"])
     for job in redo:
-        job["redo"] = {"state": "queued", "queued_at": job["redo"]["queued_at"]}
+        job["redo"] = {"state": "queued", "queued_at": job["redo"]["queued_at"], "opts": job["redo"].get("opts", {})}
         save(job)
         work_queue.put(job["id"])
 
@@ -265,7 +265,8 @@ def run_redo(job):
             raise RuntimeError("Re-translation stopped by user")
         update(**kw)
 
-    settings = {**job, "translator": "llm", "target": job.get("target") or "vi"}
+    opts = redo.get("opts") or {}
+    settings = {**job, **opts, "translator": "llm", "target": job.get("target") or "vi"}
     seg_file = JOBS_DIR / job_id / "segments.json"
     if seg_file.exists():
         settings["reuse_segments"] = str(seg_file)
@@ -285,7 +286,7 @@ def run_redo(job):
         if job["video_at"] != "local" and local.exists():  # bản chép trên laptop cũng thay bằng bản mới
             shutil.copy2(storage.final_dir(job["video_at"], job_id) / "dubbed.mp4", local.with_suffix(".part"))
             local.with_suffix(".part").replace(local)
-        job.update(translator="llm", target=settings["target"], finished=time.time())
+        job.update(opts, translator="llm", target=settings["target"], finished=time.time())
         job.pop("redo", None)
         job.pop("redo_error", None)
         update(progress=1, log="✓ Re-translated with AI")
@@ -327,13 +328,14 @@ def run_redo(job):
         time.sleep(random.uniform(20, 40))  # nghỉ giữa các video để YouTube không chặn
 
 
-def queue_redo(job_list):
-    """Đưa video đã xong vào hàng đợi dịch lại bằng AI (bỏ qua video đang dịch lại)."""
+def queue_redo(job_list, opts=None):
+    """Đưa video đã xong vào hàng đợi dịch lại bằng AI (bỏ qua video đang dịch lại).
+    opts: giọng đọc / tốc độ / cao độ đang chọn trên web, dùng cho bản mới."""
     n, now = 0, time.time()
     for i, job in enumerate(job_list):
         if job["status"] != "done" or redo_state(job):
             continue
-        job["redo"] = {"state": "queued", "queued_at": now + i * 1e-3}  # giữ đúng thứ tự trong playlist
+        job["redo"] = {"state": "queued", "queued_at": now + i * 1e-3, "opts": opts or {}}  # giữ đúng thứ tự trong playlist
         job.pop("redo_error", None)
         save(job)
         work_queue.put(job["id"])
@@ -424,17 +426,28 @@ def list_id_from_url(url):
 
 
 SETTING_DEFAULTS = {"language": "auto", "target": "vi", "voice": "female", "model": "large-v3-turbo",
-                    "translator": "llm", "bg_volume": 0.25, "cookies": "none"}
+                    "translator": "llm", "bg_volume": 0.25, "cookies": "none", "voice_rate": 0, "voice_pitch": 0}
 
 
 def settings_of(source):
     s = {k: source.get(k, v) for k, v in SETTING_DEFAULTS.items()}
     s["bg_volume"] = float(s["bg_volume"])
+    s.update(voice_opts(source))
     if s["target"] not in TARGETS:
         s["target"] = "vi"
     if s["language"] != "auto" and s["language"] not in LANGS:
         s["language"] = "auto"
     return s
+
+
+def voice_opts(source):
+    """Tốc độ đọc (%) và cao độ (Hz) của giọng lồng tiếng, giới hạn trong khoảng nghe còn tự nhiên."""
+    def num(k, lo, hi):
+        try:
+            return int(min(max(float(source.get(k) or 0), lo), hi))
+        except (TypeError, ValueError):
+            return 0
+    return {"voice_rate": num("voice_rate", -30, 40), "voice_pitch": num("voice_pitch", -20, 20)}
 
 
 def find_existing(video_id, settings):
@@ -758,8 +771,8 @@ def job_retranslate(job_id):
     job = jobs.get(job_id) or abort(404)
     if job["status"] != "done":
         return jsonify(error="Only finished videos can be re-translated"), 400
-    on = request.get_json(force=True).get("on", True)
-    return jsonify(count=queue_redo([job]) if on else stop_redo([job]))
+    data = request.get_json(force=True)
+    return jsonify(count=queue_redo([job], redo_opts(data)) if data.get("on", True) else stop_redo([job]))
 
 
 def needs_ai(job):
@@ -770,15 +783,17 @@ def needs_ai(job):
 def playlist_retranslate(pl_id):
     pl = playlists.get(pl_id) or abort(404)
     items = [jobs[e["job_id"]] for e in pl["entries"] if e["job_id"] in jobs]
-    if request.get_json(force=True).get("on", True):
-        return jsonify(count=queue_redo([j for j in items if needs_ai(j)]))
+    data = request.get_json(force=True)
+    if data.get("on", True):
+        return jsonify(count=queue_redo([j for j in items if needs_ai(j)], redo_opts(data)))
     return jsonify(count=stop_redo(items))
 
 
 @app.post("/api/retranslate")
 def library_retranslate():
     """Cả thư viện: theo thứ tự playlist rồi tới video lẻ."""
-    if not request.get_json(force=True).get("on", True):
+    data = request.get_json(force=True)
+    if not data.get("on", True):
         return jsonify(count=stop_redo(list(jobs.values())))
     ordered, seen = [], set()
     for pl in sorted(playlists.values(), key=lambda p: p["created"]):
@@ -787,7 +802,45 @@ def library_retranslate():
                 seen.add(e["job_id"])
                 ordered.append(jobs[e["job_id"]])
     ordered += sorted((j for j in jobs.values() if j["id"] not in seen), key=lambda j: j["created"])
-    return jsonify(count=queue_redo([j for j in ordered if needs_ai(j)]))
+    return jsonify(count=queue_redo([j for j in ordered if needs_ai(j)], redo_opts(data)))
+
+
+def redo_opts(data):
+    out = voice_opts(data)
+    if data.get("voice") in ("female", "male"):
+        out["voice"] = data["voice"]
+    return out
+
+
+@app.get("/api/voice-preview")
+def voice_preview():
+    """Đọc thử một câu mẫu với giọng / tốc độ / cao độ đang chọn."""
+    import asyncio
+    import tempfile
+    import edge_tts
+    target = request.args.get("target") if request.args.get("target") in TARGETS else "vi"
+    voice = TARGETS[target]["voices"].get(request.args.get("voice"), TARGETS[target]["voices"]["female"])
+    o = voice_opts(request.args)
+    text = {"vi": "Xin chào các bạn, hôm nay chúng ta sẽ tìm hiểu về thuật toán tìm đường đi ngắn nhất.",
+            "zh": "大家好，今天我们来学习最短路径算法。", "zh-TW": "大家好，今天我們來學習最短路徑演算法。"}[target]
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        path = Path(f.name)
+    try:
+        comm = edge_tts.Communicate(text, voice, rate=f"{o['voice_rate']:+d}%", pitch=f"{o['voice_pitch']:+d}Hz")
+        for _ in range(4):  # dịch vụ thỉnh thoảng trả về rỗng -> thử lại
+            try:
+                asyncio.run(asyncio.wait_for(comm.save(str(path)), 30))
+                break
+            except edge_tts.exceptions.NoAudioReceived:
+                time.sleep(1)
+        data = path.read_bytes()
+    except Exception as e:
+        return jsonify(error=f"Voice service unavailable: {e}"), 503
+    finally:
+        path.unlink(missing_ok=True)
+    if not data:
+        return jsonify(error="Voice service unavailable, try again"), 503
+    return app.response_class(data, mimetype="audio/mpeg")
 
 
 @app.post("/api/playlists/<pl_id>/retry-failed")

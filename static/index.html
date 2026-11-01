@@ -372,6 +372,7 @@ const ZH = {
   "The recording was not available within 6 hours — paste the link on the home page later.": "6 小時內未取得錄影 — 請稍後在首頁貼上連結。",
   "Stopped. To dub the full recording, paste the link on the home page after the stream ends.": "已停止。若要為完整錄影配音，請在直播結束後於首頁貼上連結。",
   "Waiting for speech…": "等待語音…",
+  "Voice speed:": "語速：", "Voice pitch:": "音高：", "▶ Preview voice": "▶ 試聽聲音", "Loading…": "載入中…",
   "~{n} days": "約 {n} 天", "~{n} h": "約 {n} 小時", "Stopping…": "停止中…", "✕ Stop": "✕ 停止",
   "Stop re-translating — the current version is kept": "停止重新翻譯（保留目前版本）",
   "🔁 Re-translating {p}%": "🔁 重新翻譯中 {p}%", "🔁 Waiting to re-translate": "🔁 等待重新翻譯", "⚠ Re-translation failed": "⚠ 重新翻譯失敗",
@@ -465,6 +466,9 @@ const SERVER_ZH = [
   [/^Reusing the recognized speech from the previous dub \((\d+) lines\)$/, "沿用上次辨識的語音（$1 句）"],
   [/^🔁 Re-translating with AI — the current version stays watchable until the new one is ready$/, "🔁 用 AI 重新翻譯，新版本完成前仍可觀看目前版本"],
   [/^✓ Re-translated with AI$/, "✓ 已用 AI 重新翻譯"],
+  [/^(\d+) lines start more than 0\.3 s late because the line before ran long$/, "有 $1 句因前一句過長而延後超過 0.3 秒"],
+  [/^Warning: (\d+) lines have no voice — the voice service could not read them$/, "警告：有 $1 句沒有配音（語音服務無法朗讀）"],
+  [/^Voice service unavailable(.*)$/s, "語音服務暫時無法使用$1"],
   [/^Re-translation stopped by user$/, "已由使用者停止重新翻譯"],
   [/^Re-translation stopped — the previous version is kept$/, "已停止重新翻譯，保留先前版本"],
   [/^Re-translation failed: (.*) — the previous version is kept$/s, "重新翻譯失敗：$1，保留先前版本"],
@@ -554,6 +558,11 @@ function formHtml() {
         <select id="model"><option value="small">${t("Fast (small)")}</option><option value="large-v3-turbo" selected>${t("Good (large-v3-turbo)")}</option><option value="large-v3">${t("Best, slow (large-v3)")}</option></select></div>
       <div><label for="translator">${t("Translator")}</label>
         <select id="translator"><option value="llm">${t("AI on this laptop (Qwen) – best, slower")}</option><option value="offline">${t("Offline on this laptop (NLLB)")}</option><option value="google">${t("Google Translate (needs internet)")}</option></select></div>
+      <div><label for="vrate">${t("Voice speed:")} <span id="vratev">0%</span></label>
+        <input id="vrate" type="range" min="-30" max="40" step="5" value="0"></div>
+      <div><label for="vpitch">${t("Voice pitch:")} <span id="vpitchv">0 Hz</span></label>
+        <input id="vpitch" type="range" min="-20" max="20" step="2" value="0">
+        <button class="ghost mini" id="vtest" type="button" style="margin-top:6px">${t("▶ Preview voice")}</button></div>
       <div><label for="bg">${t("Original audio volume:")} <span id="bgv">25%</span></label>
         <input id="bg" type="range" min="0" max="100" value="25"></div>
       <div><label for="cookies" title="${t("Turn on when YouTube says 'Sign in to confirm you're not a bot'")}">${t("Sign in to YouTube via")}</label>
@@ -565,7 +574,7 @@ function formHtml() {
 
 function bindForm() {
   // nhớ lựa chọn lần trước
-  for (const id of ["language","target","voice","model","translator","bg","cookies"]) {
+  for (const id of ["language","target","voice","model","translator","bg","cookies","vrate","vpitch"]) {
     const v = store.get("opt:" + id); if (v !== null && [...($("#" + id).options || [v])].some(o => (o.value ?? o) === v)) $("#" + id).value = v;
     $("#" + id).addEventListener("change", e => store.set("opt:" + id, e.target.value));
   }
@@ -580,6 +589,20 @@ function bindForm() {
   voiceNames(); $("#target").addEventListener("change", voiceNames);
   $("#bgv").textContent = $("#bg").value + "%";
   $("#bg").oninput = e => $("#bgv").textContent = e.target.value + "%";
+  const showVoice = () => { $("#vratev").textContent = (+$("#vrate").value > 0 ? "+" : "") + $("#vrate").value + "%";
+                            $("#vpitchv").textContent = (+$("#vpitch").value > 0 ? "+" : "") + $("#vpitch").value + " Hz"; };
+  showVoice(); $("#vrate").oninput = $("#vpitch").oninput = showVoice;
+  let sample = null;
+  $("#vtest").onclick = async e => {
+    sample?.pause();
+    e.target.disabled = true; e.target.textContent = t("Loading…");
+    try {
+      const r = await fetch("/api/voice-preview?" + new URLSearchParams(voiceParams()));
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+      sample = new Audio(URL.createObjectURL(await r.blob())); await sample.play();
+    } catch (err) { flash(t("Error: {msg}", { msg: sv(err.message) })); }
+    finally { e.target.disabled = false; e.target.textContent = t("▶ Preview voice"); }
+  };
   $("#url").oninput = e => $("#plWrap").hidden = !e.target.value.includes("list=");
   $("#go").onclick = async () => {
     const msg = $("#msg"), btn = $("#go");
@@ -590,7 +613,7 @@ function bindForm() {
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
         url: $("#url").value, playlist: isPl, language: $("#language").value, target: $("#target").value, voice: $("#voice").value,
         model: $("#model").value, translator: $("#translator").value, bg_volume: $("#bg").value / 100,
-        cookies: $("#cookies").value }) });
+        cookies: $("#cookies").value, voice_rate: +$("#vrate").value, voice_pitch: +$("#vpitch").value }) });
       $("#url").value = ""; $("#plWrap").hidden = true;
       if (r.playlist) {
         location.hash = "p=" + r.playlist.id;
@@ -696,12 +719,17 @@ function renderLibrary() {
   if ($("#aiAllStop")) $("#aiAllStop").onclick = e => redoRequest("/api/retranslate", false, e.target);
 }
 
+// giọng đọc đang chọn trong phần tuỳ chọn (nhớ trong trình duyệt nên dùng được cả ở trang khác)
+const voiceParams = () => ({ target: $("#target")?.value || store.get("opt:target") || "vi",
+  voice: $("#voice")?.value || store.get("opt:voice") || "female",
+  voice_rate: $("#vrate")?.value ?? store.get("opt:vrate") ?? 0, voice_pitch: $("#vpitch")?.value ?? store.get("opt:vpitch") ?? 0 });
+
 // gửi yêu cầu dịch lại / dừng dịch lại (video, playlist hoặc cả thư viện)
 async function redoRequest(url, on, btn) {
   if (on && btn.dataset.n && !confirm(t("Re-translate {n} videos with AI?\nIt takes about {time} with the laptop running. New videos you add are still dubbed first, and each video stays watchable until its new version is ready.", { n: btn.dataset.n, time: aiHours(btn.dataset.h * 0.5) }))) return;
   if (!on && !confirm(t("Stop re-translating? Videos keep their current version."))) return;
   btn.disabled = true;
-  const r = await api(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on }) });
+  const r = await api(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on, ...voiceParams() }) });
   flash(on ? t("{n} videos will be re-translated with AI.", { n: r.count }) : t("Re-translating stopped."));
   await refreshLib(); renderedKey = null; route();
 }
@@ -860,7 +888,7 @@ async function renderVideo(id) {
     $("#redo").onclick = async () => {
       if (!confirm(t("Dub this video again with the same settings? (the current copy is kept)"))) return;
       const r = await api("/api/jobs", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, target, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies }) });
+        body: JSON.stringify({ url: j.url, force: true, voice: j.voice, language: j.language, target, model: j.model, translator: j.translator, bg_volume: j.bg_volume, cookies: j.cookies, voice_rate: j.voice_rate, voice_pitch: j.voice_pitch }) });
       location.hash = "v=" + r.job.id;
     };
     return;

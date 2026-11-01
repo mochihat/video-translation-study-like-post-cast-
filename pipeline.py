@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import wave
 from pathlib import Path
 
@@ -248,6 +249,9 @@ def transcribe(audio_path, model_name, language, log, progress):
             language=lang,  # ngôn ngữ phát hiện ở đoạn đầu được dùng cho cả video
             vad_filter=True,
             beam_size=5,
+            # mốc thời gian theo từng từ: câu bắt đầu/kết thúc đúng lúc người nói mở miệng/dứt lời,
+            # không lẫn khoảng lặng hay nhạc nền (lệch mốc làm giọng lồng tiếng vào sai nhịp)
+            word_timestamps=True,
             initial_prompt="以下是普通话的句子。" if lang == "zh" else None,
         )
         if lang is None:
@@ -260,7 +264,8 @@ def transcribe(audio_path, model_name, language, log, progress):
         for seg in segments:
             text = seg.text.strip()
             if text:
-                result.append({"start": offset + seg.start, "end": offset + seg.end, "text": text})
+                a, b = (seg.words[0].start, seg.words[-1].end) if seg.words else (seg.start, seg.end)
+                result.append({"start": offset + a, "end": offset + max(b, a + 0.2), "text": text})
             progress(min((offset + seg.end) / max(duration, 1), 1.0))
         del audio, segments
     return merge_short(result, sep="" if lang in NO_SPACES else " "), duration, lang
@@ -399,6 +404,7 @@ class LLMUnavailable(Exception):
 
 def _llm_prompt(src, target, title):
     tgt = TARGETS[target]["name"]
+    unit = "syllables (words)" if target == "vi" else "characters"
     style = {
         "vi": "- When the speaker says \"we\" while talking to the audience, translate it as \"chúng ta\" (never \"chúng tôi\"); "
               "\"you\" addressing the audience is \"các bạn\" or \"bạn\".\n",
@@ -418,7 +424,9 @@ def _llm_prompt(src, target, title):
         "even when line N is an incomplete sentence fragment. Never move words to a neighbouring line, never merge, "
         "split or skip lines. Fragments should still read naturally when the lines are read one after another.\n"
         "- Keep the speaker's meaning exactly: do not add, correct or reinterpret content (left stays left, right stays right).\n"
-        "- Be concise: each line is read aloud in the same time as the original.\n"
+        f"- Each line shows its time budget, e.g. [3] (2.4s, max 8 {unit}). The translation is read aloud by a voice-over "
+        f"in exactly that time, so it MUST NOT exceed the {unit} limit. Shorten by dropping fillers, repetitions and "
+        "redundant words, using shorter synonyms, never by dropping meaning. Short is fine.\n"
         f"- Use the standard {tgt} terminology of the field. When people in that field normally keep the English term "
         "(e.g. robot, GPU, A*, framework), keep it in English. Keep names, code, numbers and formulas unchanged.\n"
         f"{style}"
@@ -431,7 +439,8 @@ def _llm_prompt(src, target, title):
 def _same(a, b):
     """Mô hình chép lại đúng câu gốc của dòng đó chưa (cho phép sai lệch nhỏ) -> phát hiện dịch lệch dòng."""
     import difflib
-    norm = lambda x: re.sub(r"\W+", " ", x.lower()).strip()
+    # bỏ phần "(2.4s, max 8 words)" nếu mô hình chép cả vào
+    norm = lambda x: re.sub(r"\W+", " ", re.sub(r"^\s*(\[\d+\]\s*)?\([^)]*\)\s*", "", x).lower()).strip()
     return difflib.SequenceMatcher(None, norm(a), norm(b)).ratio() >= 0.8
 
 
@@ -465,6 +474,11 @@ def _llm_bad(line, target):
     return not line or (target == "vi" and CJK.search(line))
 
 
+def _budget(slot, target):
+    """Số âm tiết (tiếng Việt) / chữ Hán tối đa đọc kịp trong slot giây, cho phép đọc nhanh hơn thường ~15%."""
+    return max(2, int(slot * SPEECH_RATE.get(target, 3.3) * 1.15))
+
+
 def translate_llm(segments, lang, target, log, progress, title=""):
     # nhường bộ nhớ GPU (6 GB) cho mô hình dịch: bỏ Whisper/NLLB khỏi VRAM, lúc sau tự nạp lại khi cần
     _whisper_cache.clear()
@@ -473,13 +487,18 @@ def translate_llm(segments, lang, target, log, progress, title=""):
     system = _llm_prompt(lang_name(lang), target, title)
     log(f"Translating with AI ({LLM_MODEL}) in context")
     texts = [s["text"] for s in segments]
+    unit = "words" if target == "vi" else "chars"
+    room = slots(segments, segments[-1]["end"] + 1 if segments else 0)
+    limits = [_budget(x, target) for x in room]
     out, fallback = [], []
     try:
         for i in range(0, len(texts), LLM_BATCH):
             batch = texts[i:i + LLM_BATCH]
             ctx = "".join(f"{texts[k]}\n=> {out[k]}\n" for k in range(max(0, i - LLM_CONTEXT), i))
             user = (f"Previous lines (context only, already translated, do not output):\n{ctx}\n" if ctx else "") + \
-                "Lines to translate:\n" + "\n".join(f"[{k + 1}] {t}" for k, t in enumerate(batch))
+                "Lines to translate:\n" + "\n".join(
+                    f"[{k + 1}] ({room[i + k]:.1f}s, max {limits[i + k]} {unit}) {t}"
+                    for k, t in enumerate(batch))
             res = None
             for temperature in (0.2, 0.5):  # lần 2 đổi nhiệt độ để mô hình trả lời khác đi
                 res = _llm_call(system, user, len(batch), temperature, batch)
@@ -508,49 +527,108 @@ def translate_llm(segments, lang, target, log, progress, title=""):
 
 
 # ---------- 4. Lồng tiếng ----------
-async def _tts_one(text, voice, mp3_path, sem):
-    # câu chỉ có dấu câu/ký hiệu ("...", "♪") thì Edge TTS không đọc được -> bỏ qua
+SPEECH_RATE = {"vi": 3.3, "zh": 4.5, "zh-TW": 4.5}  # âm tiết (chữ Hán) mỗi giây của giọng Edge ở tốc độ thường
+MAX_SPEED = 1.5  # đọc nhanh nhất 1,5 lần để còn nghe rõ
+
+
+def slots(segments, total_duration):
+    """Thời gian dành cho mỗi câu: tới khi câu kế tiếp bắt đầu (tối đa 1 giây sau khi người nói dứt câu)."""
+    out = []
+    for i, seg in enumerate(segments):
+        nxt = segments[i + 1]["start"] if i + 1 < len(segments) else total_duration
+        out.append(max(min(nxt, seg["end"] + 1.0) - seg["start"], 0.5))
+    return out
+
+
+def edge_rate(speed):
+    """Hệ số tốc độ (1.2 = nhanh hơn 20%) -> tham số rate của Edge TTS."""
+    return f"{round((speed - 1) * 100):+d}%"
+
+
+async def _tts_one(text, voice, mp3_path, sem, rate="+0%", pitch="+0Hz"):
+    """Trả True khi đọc được. Edge TTS thỉnh thoảng trả về "không có âm thanh" ngẫu nhiên cho cả câu bình thường
+    -> thử lại nhiều lần, giãn cách dần, thay vì bỏ câu đó (bản cũ bỏ luôn nên có câu chỉ có phụ đề mà không có tiếng)."""
+    # câu chỉ có dấu câu/ký hiệu ("...", "♪") thì không có gì để đọc
     if not any(c.isalnum() for c in text):
-        return
+        return True
     async with sem:
-        for attempt in range(3):
+        for attempt in range(8):
             try:
                 # kết nối có lúc treo mãi không trả lời (không lỗi, không ngắt) -> giới hạn 60 giây mỗi câu
-                await asyncio.wait_for(edge_tts.Communicate(text, voice).save(str(mp3_path)), 60)
-                return
+                await asyncio.wait_for(edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(mp3_path)), 60)
+                if mp3_path.exists() and mp3_path.stat().st_size > 0:
+                    return True
             except edge_tts.exceptions.NoAudioReceived:
-                mp3_path.unlink(missing_ok=True)  # câu này không đọc được, bỏ qua thay vì hỏng cả video
-                return
+                pass
             except Exception as e:
-                mp3_path.unlink(missing_ok=True)
-                if attempt == 2:
+                if attempt >= 3:
                     if isinstance(e, asyncio.TimeoutError):  # "timed out" -> được coi là lỗi mạng tạm thời, chờ rồi thử lại
                         raise RuntimeError("Voice service (Edge TTS) timed out") from e
                     raise
-                await asyncio.sleep(2)
+            mp3_path.unlink(missing_ok=True)
+            await asyncio.sleep(1.5 * (attempt + 1))
+        return False
 
 
-async def _tts_all(segments, voice, tts_dir, progress):
-    sem = asyncio.Semaphore(6)
+async def _tts_all(jobs, voice, pitch, progress):
+    """jobs: [(chữ, file mp3, rate)]. Trả số câu không đọc được."""
+    sem = asyncio.Semaphore(8)
     done = 0
 
-    async def run(i, seg):
+    async def run(text, mp3, rate):
         nonlocal done
-        await _tts_one(seg["vi"], voice, tts_dir / f"{i:05}.mp3", sem)
+        ok = await _tts_one(text, voice, mp3, sem, rate, pitch)
         done += 1
-        progress(done / len(segments))
+        progress(done / len(jobs))
+        return ok
 
-    await asyncio.gather(*(run(i, s) for i, s in enumerate(segments) if s["vi"]))
+    res = await asyncio.gather(*(run(*j) for j in jobs))
+    return [j for j, ok in zip(jobs, res) if not ok]
 
 
-def synthesize(segments, voice, total_duration, workdir, log, progress):
+def _audio_len(path):
+    import av
+    with av.open(str(path)) as c:
+        return float(c.duration or 0) / 1e6
+
+
+def synthesize(segments, voice, total_duration, workdir, log, progress, rate=0, pitch=0):
+    """rate: % nhanh/chậm hơn bình thường, pitch: Hz cao/thấp hơn (thanh trượt trong phần tuỳ chọn)."""
     tts_dir = workdir / "tts"
     tts_dir.mkdir(exist_ok=True)
-    asyncio.run(_tts_all(segments, voice, tts_dir, progress))
+    base = 1 + rate / 100
+    pitch_s = f"{int(pitch):+d}Hz"
+    avail = slots(segments, total_duration)
+    mp3 = lambda i: tts_dir / f"{i:05}.mp3"
+    todo = [(seg["vi"], mp3(i), edge_rate(base)) for i, seg in enumerate(segments) if seg["vi"]]
+    asyncio.run(_tts_all(todo, voice, pitch_s, lambda p: progress(p * 0.75)))
+
+    # câu dài hơn chỗ trống: cho dịch vụ đọc lại nhanh hơn ngay từ đầu (tự nhiên hơn nhiều so với tua bằng ffmpeg)
+    redo = []
+    for i, seg in enumerate(segments):
+        if mp3(i).exists():
+            need = _audio_len(mp3(i)) / avail[i]
+            if need > 1.1:  # lố ít thì lúc ghép tăng tốc nhẹ là đủ, khỏi đọc lại
+                speed = min(base * need * 1.03, max(MAX_SPEED, base))
+                if speed > base * 1.02:
+                    redo.append((seg["vi"], tts_dir / f"{i:05}_fast.mp3", edge_rate(speed)))
+    if redo:
+        asyncio.run(_tts_all(redo, voice, pitch_s, lambda p: progress(0.75 + p * 0.15)))
+        for _, fast, _ in redo:
+            if fast.exists():
+                fast.replace(tts_dir / fast.name.replace("_fast", ""))
+
+    # thử lại lần cuối, từng câu một, những câu dịch vụ vẫn không đọc được
+    missing = [(seg["vi"], mp3(i), edge_rate(base)) for i, seg in enumerate(segments)
+               if seg["vi"] and any(c.isalnum() for c in seg["vi"]) and not mp3(i).exists()]
+    if missing:
+        time.sleep(5)
+        asyncio.run(_tts_all(missing, voice, pitch_s, lambda p: None))
 
     # ghi thẳng ra file theo thứ tự thời gian thay vì giữ cả track trong RAM
     # (video 6 tiếng = 500 triệu mẫu, giữ trong RAM tốn tới ~8 GB khi lưu)
     dub = workdir / "dub.wav"
+    late, squeezed, silent = 0, 0, 0
     with wave.open(str(dub), "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
@@ -564,39 +642,49 @@ def synthesize(segments, voice, total_duration, workdir, log, progress):
                 out.writeframes(np.zeros(k, dtype=np.int16).tobytes())
                 written += k
 
-        cursor = 0.0  # thời điểm câu trước kết thúc
-        sped_up = 0
         for i, seg in enumerate(segments):
-            mp3 = tts_dir / f"{i:05}.mp3"
-            if not mp3.exists():
+            if not mp3(i).exists():
+                silent += bool(seg["vi"]) and any(c.isalnum() for c in seg["vi"])
                 continue
             wav_path = tts_dir / f"{i:05}.wav"
-            ffmpeg("-i", str(mp3), "-ac", "1", "-ar", str(SR), str(wav_path))
-            audio = read_wav(wav_path)
-            dur = len(audio) / SR
-
-            # Khoảng thời gian được phép nói: tới khi câu kế tiếp bắt đầu
-            next_start = segments[i + 1]["start"] if i + 1 < len(segments) else total_duration
-            slot = max(next_start - seg["start"], 0.5)
-            if dur > slot * 1.05:
-                tempo = min(dur / slot, 1.5)  # tăng tốc tối đa 1.5x để còn nghe rõ
-                fast = tts_dir / f"{i:05}_fast.wav"
-                ffmpeg("-i", str(wav_path), "-filter:a", f"atempo={tempo:.3f}", "-ar", str(SR), str(fast))
+            ffmpeg("-i", str(mp3(i)), "-ac", "1", "-ar", str(SR), str(wav_path))
+            audio = _trim_silence(read_wav(wav_path))
+            start = max(seg["start"], written / SR)
+            late += start > seg["start"] + 0.3
+            # câu trước đọc tràn sang -> còn ít chỗ hơn; tăng tốc thêm chút ít (tối đa 1,25 lần) cho kịp câu sau
+            room = (segments[i + 1]["start"] if i + 1 < len(segments) else total_duration) - start
+            if len(audio) / SR > room * 1.05 and room > 0.3:
+                fast = tts_dir / f"{i:05}_t.wav"
+                write_wav(tts_dir / f"{i:05}_n.wav", audio)
+                tempo = min(len(audio) / SR / room, 1.25)
+                ffmpeg("-i", str(tts_dir / f"{i:05}_n.wav"), "-filter:a", f"atempo={tempo:.3f}", "-ar", str(SR), str(fast))
                 audio = read_wav(fast)
-                sped_up += 1
-
-            start = max(seg["start"], cursor)
+                squeezed += 1
             pad_to(int(start * SR))  # các câu không chồng lên nhau nên chỉ cần nối tiếp
             out.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
             written += len(audio)
-            cursor = written / SR
-            for f in (wav_path, tts_dir / f"{i:05}_fast.wav"):
+            for f in tts_dir.glob(f"{i:05}*.wav"):
                 f.unlink(missing_ok=True)
 
         pad_to(int(total_duration * SR))
-    if sped_up:
-        log(f"{sped_up}/{len(segments)} lines were read faster to fit the timing")
+    if redo:
+        log(f"{len(redo)}/{len(segments)} lines were read faster to fit the timing")
+    if late:
+        log(f"{late} lines start more than 0.3 s late because the line before ran long")
+    if silent:
+        log(f"Warning: {silent} lines have no voice — the voice service could not read them")
+    progress(1)
     return dub
+
+
+def _trim_silence(audio, threshold=0.01):
+    """Edge TTS thêm khoảng lặng ~0,1–0,3 giây ở đầu và cuối mỗi câu -> cắt bớt để giọng vào đúng lúc người nói mở miệng."""
+    loud = np.flatnonzero(np.abs(audio) > threshold)
+    if not len(loud):
+        return audio
+    a = max(loud[0] - int(0.03 * SR), 0)
+    b = min(loud[-1] + int(0.08 * SR), len(audio))
+    return audio[a:b]
 
 
 # ---------- 5. Ghép video ----------
@@ -669,7 +757,8 @@ def run_pipeline(job, workdir: Path, update):
     write_srt(workdir / "original.srt", segments, "text")
 
     update(step="tts", progress=0)
-    dub = synthesize(segments, TARGETS[target]["voices"][job["voice"]], duration, workdir, log, lambda p: update(progress=p))
+    dub = synthesize(segments, TARGETS[target]["voices"][job["voice"]], duration, workdir, log, lambda p: update(progress=p),
+                     job.get("voice_rate", 0), job.get("voice_pitch", 0))
 
     update(step="mux", progress=0)
     mux(video, dub, workdir / "vi.srt", job["bg_volume"], workdir / "dubbed.mp4", TARGETS[target]["sub"])
