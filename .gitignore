@@ -8,3 +8,4 @@ config.json
 tmp/
 config.json.tmp
 voices/f5_vi_ema.safetensors
+.venv-tts/
