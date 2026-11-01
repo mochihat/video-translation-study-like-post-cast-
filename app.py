@@ -826,13 +826,15 @@ def voice_preview():
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         path = Path(f.name)
     try:
-        comm = edge_tts.Communicate(text, voice, rate=f"{o['voice_rate']:+d}%", pitch=f"{o['voice_pitch']:+d}Hz")
-        for _ in range(4):  # dịch vụ thỉnh thoảng trả về rỗng -> thử lại
+        for attempt in range(6):  # dịch vụ thỉnh thoảng trả về rỗng -> thử lại (mỗi lần một kết nối mới)
             try:
+                comm = edge_tts.Communicate(text, voice, rate=f"{o['voice_rate']:+d}%", pitch=f"{o['voice_pitch']:+d}Hz")
                 asyncio.run(asyncio.wait_for(comm.save(str(path)), 30))
-                break
+                if path.stat().st_size:
+                    break
             except edge_tts.exceptions.NoAudioReceived:
-                time.sleep(1)
+                pass
+            time.sleep(1 + attempt)
         data = path.read_bytes()
     except Exception as e:
         return jsonify(error=f"Voice service unavailable: {e}"), 503
