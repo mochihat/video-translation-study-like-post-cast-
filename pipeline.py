@@ -449,17 +449,24 @@ def _llm_call(system, user, n, temperature, batch):
     schema = {"type": "object", "required": keys, "additionalProperties": False,
               "properties": {k: {"type": "object", "required": ["src", "tr"], "additionalProperties": False,
                                  "properties": {"src": {"type": "string"}, "tr": {"type": "string"}}} for k in keys}}
-    try:
-        r = requests.post(f"{OLLAMA}/api/chat", timeout=600, json={
-            "model": LLM_MODEL, "stream": False, "format": schema, "keep_alive": "5m",
-            "options": {"temperature": temperature, "num_ctx": 4096, "num_predict": 3000},
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        })
-    except requests.RequestException as e:
-        raise LLMUnavailable(f"cannot reach Ollama at {OLLAMA}") from e
-    if r.status_code == 404:
-        raise LLMUnavailable(f"model {LLM_MODEL} is not installed")
-    r.raise_for_status()
+    for attempt in range(3):
+        try:
+            r = requests.post(f"{OLLAMA}/api/chat", timeout=600, json={
+                "model": LLM_MODEL, "stream": False, "format": schema, "keep_alive": "5m",
+                "options": {"temperature": temperature, "num_ctx": 4096, "num_predict": 3000},
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            })
+        except requests.RequestException as e:
+            raise LLMUnavailable(f"cannot reach Ollama at {OLLAMA}") from e
+        if r.status_code == 404:
+            raise LLMUnavailable(f"model {LLM_MODEL} is not installed")
+        if r.status_code < 500:
+            break
+        # Ollama thỉnh thoảng trả lỗi 500 cho một nhóm câu (không ghi lý do) -> thử lại,
+        # vẫn lỗi thì chỉ nhóm câu này dịch bằng NLLB, không làm hỏng cả video
+        time.sleep(3)
+    if not r.ok:
+        return None
     try:
         out = json.loads(r.json()["message"]["content"])
         out = [out[k] for k in keys]
