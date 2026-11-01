@@ -388,7 +388,7 @@ def translate_google(segments, target, log, progress):
 # sửa lỗi nhận dạng giọng nói, giữ thuật ngữ chuyên ngành và viết câu tự nhiên như người bản xứ.
 OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b-instruct")
-LLM_BATCH = 20  # số câu mỗi lần gọi
+LLM_BATCH = 10  # số câu mỗi lần gọi
 LLM_CONTEXT = 6  # số câu đã dịch ngay trước đó gửi kèm làm ngữ cảnh
 CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
 
@@ -400,7 +400,8 @@ class LLMUnavailable(Exception):
 def _llm_prompt(src, target, title):
     tgt = TARGETS[target]["name"]
     style = {
-        "vi": "- Giảng viên nói với sinh viên thì xưng \"chúng ta\" / \"các bạn\" (không dùng \"chúng tôi\" khi nói về cả lớp).\n",
+        "vi": "- When the speaker says \"we\" while talking to the audience, translate it as \"chúng ta\" (never \"chúng tôi\"); "
+              "\"you\" addressing the audience is \"các bạn\" or \"bạn\".\n",
         "zh": "- 使用简体中文。\n",
         "zh-TW": "- 使用繁體中文（台灣用語）。\n",
     }.get(target, "")
@@ -413,20 +414,32 @@ def _llm_prompt(src, target, title):
         "- Translate the meaning in context, never word by word. Lines come from automatic speech recognition: "
         "silently fix obvious recognition mistakes (e.g. \"a star search\" = A* search, \"dextra's hand\" = dexterous hand), "
         "drop stutters, repeated words and fillers (um, uh, you know, basically).\n"
-        "- Output exactly one translation per input line, in the same order. Never merge, split, skip or add lines. "
-        "A line may continue a sentence from the previous line: translate it so the lines read naturally one after another.\n"
+        "- Lines are timed subtitle cues. The translation for key N must contain ONLY what is said in line N, "
+        "even when line N is an incomplete sentence fragment. Never move words to a neighbouring line, never merge, "
+        "split or skip lines. Fragments should still read naturally when the lines are read one after another.\n"
+        "- Keep the speaker's meaning exactly: do not add, correct or reinterpret content (left stays left, right stays right).\n"
         "- Be concise: each line is read aloud in the same time as the original.\n"
         f"- Use the standard {tgt} terminology of the field. When people in that field normally keep the English term "
         "(e.g. robot, GPU, A*, framework), keep it in English. Keep names, code, numbers and formulas unchanged.\n"
         f"{style}"
         f"- Use correct punctuation and capitalization. Write only in {tgt}; no notes or explanations.\n"
-        'Reply with JSON: {"t": ["translation of line 1", "translation of line 2", ...]}'
+        'Reply with JSON mapping each line number to an object with "src" (line N copied exactly) and "tr" '
+        '(its translation): {"1": {"src": "...", "tr": "..."}, "2": {"src": "...", "tr": "..."}, ...}'
     )
 
 
-def _llm_call(system, user, n, temperature):
-    schema = {"type": "object", "required": ["t"],
-              "properties": {"t": {"type": "array", "items": {"type": "string"}, "minItems": n, "maxItems": n}}}
+def _same(a, b):
+    """Mô hình chép lại đúng câu gốc của dòng đó chưa (cho phép sai lệch nhỏ) -> phát hiện dịch lệch dòng."""
+    import difflib
+    norm = lambda x: re.sub(r"\W+", " ", x.lower()).strip()
+    return difflib.SequenceMatcher(None, norm(a), norm(b)).ratio() >= 0.8
+
+
+def _llm_call(system, user, n, temperature, batch):
+    keys = [str(k + 1) for k in range(n)]
+    schema = {"type": "object", "required": keys, "additionalProperties": False,
+              "properties": {k: {"type": "object", "required": ["src", "tr"], "additionalProperties": False,
+                                 "properties": {"src": {"type": "string"}, "tr": {"type": "string"}}} for k in keys}}
     try:
         r = requests.post(f"{OLLAMA}/api/chat", timeout=600, json={
             "model": LLM_MODEL, "stream": False, "format": schema, "keep_alive": "5m",
@@ -439,10 +452,12 @@ def _llm_call(system, user, n, temperature):
         raise LLMUnavailable(f"model {LLM_MODEL} is not installed")
     r.raise_for_status()
     try:
-        out = json.loads(r.json()["message"]["content"])["t"]
+        out = json.loads(r.json()["message"]["content"])
+        out = [out[k] for k in keys]
+        # dòng nào chép lại sai câu gốc là dòng bị lệch -> để trống, lát nữa dịch lại riêng
+        return [str(o["tr"]).strip() if _same(o["src"], src) else "" for o, src in zip(out, batch)]
     except (ValueError, KeyError, TypeError):
         return None
-    return [str(x).strip() for x in out] if len(out) == n else None
 
 
 def _llm_bad(line, target):
@@ -464,10 +479,10 @@ def translate_llm(segments, lang, target, log, progress, title=""):
             batch = texts[i:i + LLM_BATCH]
             ctx = "".join(f"{texts[k]}\n=> {out[k]}\n" for k in range(max(0, i - LLM_CONTEXT), i))
             user = (f"Previous lines (context only, already translated, do not output):\n{ctx}\n" if ctx else "") + \
-                "Lines to translate:\n" + "\n".join(f"{k + 1}. {t}" for k, t in enumerate(batch))
+                "Lines to translate:\n" + "\n".join(f"[{k + 1}] {t}" for k, t in enumerate(batch))
             res = None
             for temperature in (0.2, 0.5):  # lần 2 đổi nhiệt độ để mô hình trả lời khác đi
-                res = _llm_call(system, user, len(batch), temperature)
+                res = _llm_call(system, user, len(batch), temperature, batch)
                 if res and not any(_llm_bad(x, target) for x in res):
                     break
             if res is None:
