@@ -298,7 +298,7 @@ def list_id_from_url(url):
 
 
 SETTING_DEFAULTS = {"language": "auto", "target": "vi", "voice": "female", "model": "large-v3-turbo",
-                    "translator": "offline", "bg_volume": 0.25, "cookies": "none"}
+                    "translator": "llm", "bg_volume": 0.25, "cookies": "none"}
 
 
 def settings_of(source):

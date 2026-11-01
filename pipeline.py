@@ -1,6 +1,9 @@
 """Quy trình: tải video YouTube -> nhận dạng giọng nói -> dịch sang tiếng Việt / tiếng Trung -> lồng tiếng -> ghép video."""
 import asyncio
+import gc
 import json
+import os
+import re
 import shutil
 import subprocess
 import threading
@@ -10,6 +13,7 @@ from pathlib import Path
 import edge_tts
 import imageio_ffmpeg
 import numpy as np
+import requests
 import yt_dlp
 from deep_translator import GoogleTranslator
 
@@ -319,13 +323,18 @@ def translate_offline(segments, lang, target, log, progress):
     return segments
 
 
-def translate(segments, engine, lang, target, log, progress):
+def translate(segments, engine, lang, target, log, progress, title=""):
     """Bản dịch lưu ở khoá "vi" (và file vi.srt) dù đầu ra là tiếng Trung, để video cũ vẫn mở được."""
     if lang == target:  # video vốn đã là ngôn ngữ đầu ra: chỉ đọc lại, không dịch
         log(f"Video is already in {TARGETS[target]['name']}, skipping translation")
         for s in segments:
             s["vi"] = s["text"]
         return segments
+    if engine == "llm":
+        try:
+            return translate_llm(segments, lang, target, log, progress, title)
+        except LLMUnavailable as e:
+            log(f"AI translator unavailable ({str(e)[:80]}), using offline translator")
     if engine == "google":
         try:
             return translate_google(segments, target, log, progress)
@@ -369,6 +378,115 @@ def translate_google(segments, target, log, progress):
         chunk.append(t.replace("\n", " "))
         size += len(t) + 1
     flush()
+    for s, vi in zip(segments, out):
+        s["vi"] = vi
+    return segments
+
+
+# Dịch bằng mô hình ngôn ngữ lớn chạy trên máy (Ollama + Qwen2.5 7B), cài bằng install-llm.sh.
+# Khác NLLB (dịch từng câu riêng lẻ, sát chữ): mô hình đọc cả đoạn kèm câu trước đó nên hiểu ngữ cảnh,
+# sửa lỗi nhận dạng giọng nói, giữ thuật ngữ chuyên ngành và viết câu tự nhiên như người bản xứ.
+OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b-instruct")
+LLM_BATCH = 20  # số câu mỗi lần gọi
+LLM_CONTEXT = 6  # số câu đã dịch ngay trước đó gửi kèm làm ngữ cảnh
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+class LLMUnavailable(Exception):
+    pass
+
+
+def _llm_prompt(src, target, title):
+    tgt = TARGETS[target]["name"]
+    style = {
+        "vi": "- Giảng viên nói với sinh viên thì xưng \"chúng ta\" / \"các bạn\" (không dùng \"chúng tôi\" khi nói về cả lớp).\n",
+        "zh": "- 使用简体中文。\n",
+        "zh-TW": "- 使用繁體中文（台灣用語）。\n",
+    }.get(target, "")
+    return (
+        f"You are a professional subtitle translator and dubbing script writer. "
+        f"Translate the numbered lines of a video transcript from {src} into natural, fluent {tgt}, "
+        f"the way a native speaker would actually say it.\n"
+        f"Video title: {title or 'unknown'}\n"
+        "Rules:\n"
+        "- Translate the meaning in context, never word by word. Lines come from automatic speech recognition: "
+        "silently fix obvious recognition mistakes (e.g. \"a star search\" = A* search, \"dextra's hand\" = dexterous hand), "
+        "drop stutters, repeated words and fillers (um, uh, you know, basically).\n"
+        "- Output exactly one translation per input line, in the same order. Never merge, split, skip or add lines. "
+        "A line may continue a sentence from the previous line: translate it so the lines read naturally one after another.\n"
+        "- Be concise: each line is read aloud in the same time as the original.\n"
+        f"- Use the standard {tgt} terminology of the field. When people in that field normally keep the English term "
+        "(e.g. robot, GPU, A*, framework), keep it in English. Keep names, code, numbers and formulas unchanged.\n"
+        f"{style}"
+        f"- Use correct punctuation and capitalization. Write only in {tgt}; no notes or explanations.\n"
+        'Reply with JSON: {"t": ["translation of line 1", "translation of line 2", ...]}'
+    )
+
+
+def _llm_call(system, user, n, temperature):
+    schema = {"type": "object", "required": ["t"],
+              "properties": {"t": {"type": "array", "items": {"type": "string"}, "minItems": n, "maxItems": n}}}
+    try:
+        r = requests.post(f"{OLLAMA}/api/chat", timeout=600, json={
+            "model": LLM_MODEL, "stream": False, "format": schema, "keep_alive": "5m",
+            "options": {"temperature": temperature, "num_ctx": 4096, "num_predict": 3000},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        })
+    except requests.RequestException as e:
+        raise LLMUnavailable(f"cannot reach Ollama at {OLLAMA}") from e
+    if r.status_code == 404:
+        raise LLMUnavailable(f"model {LLM_MODEL} is not installed")
+    r.raise_for_status()
+    try:
+        out = json.loads(r.json()["message"]["content"])["t"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return [str(x).strip() for x in out] if len(out) == n else None
+
+
+def _llm_bad(line, target):
+    # Qwen đôi khi chêm chữ Hán vào câu tiếng Việt
+    return not line or (target == "vi" and CJK.search(line))
+
+
+def translate_llm(segments, lang, target, log, progress, title=""):
+    # nhường bộ nhớ GPU (6 GB) cho mô hình dịch: bỏ Whisper/NLLB khỏi VRAM, lúc sau tự nạp lại khi cần
+    _whisper_cache.clear()
+    _nllb.clear()
+    gc.collect()
+    system = _llm_prompt(lang_name(lang), target, title)
+    log(f"Translating with AI ({LLM_MODEL}) in context")
+    texts = [s["text"] for s in segments]
+    out, fallback = [], []
+    try:
+        for i in range(0, len(texts), LLM_BATCH):
+            batch = texts[i:i + LLM_BATCH]
+            ctx = "".join(f"{texts[k]}\n=> {out[k]}\n" for k in range(max(0, i - LLM_CONTEXT), i))
+            user = (f"Previous lines (context only, already translated, do not output):\n{ctx}\n" if ctx else "") + \
+                "Lines to translate:\n" + "\n".join(f"{k + 1}. {t}" for k, t in enumerate(batch))
+            res = None
+            for temperature in (0.2, 0.5):  # lần 2 đổi nhiệt độ để mô hình trả lời khác đi
+                res = _llm_call(system, user, len(batch), temperature)
+                if res and not any(_llm_bad(x, target) for x in res):
+                    break
+            if res is None:
+                res = [""] * len(batch)
+            for k, x in enumerate(res):
+                if _llm_bad(x, target):
+                    fallback.append(i + k)
+            out += res
+            progress(len(out) / len(texts))
+    finally:
+        try:  # trả lại VRAM cho Whisper của video kế tiếp
+            requests.post(f"{OLLAMA}/api/generate", json={"model": LLM_MODEL, "keep_alive": 0}, timeout=30)
+        except requests.RequestException:
+            pass
+    if fallback:  # câu mô hình dịch hỏng thì dịch lại bằng NLLB
+        log(f"{len(fallback)} lines were translated with the offline translator instead")
+        redo = translate_offline([{"text": texts[k]} for k in fallback], lang, target, log, lambda p: None)
+        for k, r in zip(fallback, redo):
+            out[k] = r["vi"]
     for s, vi in zip(segments, out):
         s["vi"] = vi
     return segments
@@ -519,7 +637,8 @@ def run_pipeline(job, workdir: Path, update):
     target = job.get("target", "vi")
 
     update(step="translate", progress=0)
-    segments = translate(segments, job.get("translator", "offline"), lang, target, log, lambda p: update(progress=p))
+    segments = translate(segments, job.get("translator", "offline"), lang, target, log, lambda p: update(progress=p),
+                         info.get("title", ""))
     (workdir / "segments.json").write_text(json.dumps(segments, ensure_ascii=False, indent=1), "utf-8")
     write_srt(workdir / "vi.srt", segments, "vi")
     write_srt(workdir / "original.srt", segments, "text")

@@ -307,6 +307,7 @@ const ZH = {
   "Video not found (it may have been deleted).": "找不到影片（可能已被刪除）。",
   "Plug the drive in to watch — the video opens automatically once the drive is detected. The bilingual transcript below is still available.":
     "請插入硬碟觀看 — 偵測到硬碟後影片會自動開啟。下方的雙語字幕仍可閱讀。",
+  "AI on this laptop (Qwen) – best, slower": "本機 AI（Qwen）－品質最佳，較慢",
   "Back 10 s (J)": "倒退 10 秒 (J)", "Forward 10 s (L)": "快轉 10 秒 (L)", "Speed": "播放速度",
   "Shortcuts: J / L = ∓10 s, ← / → = ∓5 s, Shift + < / > = slower / faster, Space = play/pause": "快捷鍵：J / L = 倒退／快轉 10 秒，← / → = 5 秒，Shift + < / > = 減速／加速，空白鍵 = 播放／暫停",
   "Redo": "重做", "Delete": "刪除", "💾 Stored on: {place}": "💾 存放於：{place}", " · copy on laptop": " · 筆電上有副本",
@@ -440,6 +441,9 @@ const SERVER_ZH = [
   [/^Detected language: (.+) \((\d+)% confidence\)$/, (_, n, p) => `偵測到語言：${byEnglish(n) ? sourceName(byEnglish(n)) : n}（信心度 ${p}%）`],
   [/^Warning: '(.+)' is not supported by the offline translator, translation may be poor$/, "警告：離線翻譯不支援「$1」，翻譯品質可能較差"],
   [/^Loaded offline translation model \(NLLB\)$/, "已載入離線翻譯模型（NLLB）"],
+  [/^Translating with AI \((.+)\) in context$/, "使用 AI（$1）依上下文翻譯"],
+  [/^(\d+) lines were translated with the offline translator instead$/, "有 $1 句改用離線翻譯"],
+  [/^AI translator unavailable \((.*)\), using offline translator$/s, "無法使用 AI 翻譯（$1），改用離線翻譯"],
   [/^Video is already in (.+), skipping translation$/, (_, n) => `影片本來就是${targetName(LANGS.targets.find(x => x.name === n)?.id)}，略過翻譯`],
   [/^Google Translate unavailable \((.*)\), using offline translator$/s, "無法使用 Google 翻譯（$1），改用離線翻譯"],
   [/^Translation error /, "翻譯錯誤 "],
@@ -522,7 +526,7 @@ function formHtml() {
       <div><label for="model">${t("Recognition quality")}</label>
         <select id="model"><option value="small">${t("Fast (small)")}</option><option value="large-v3-turbo" selected>${t("Good (large-v3-turbo)")}</option><option value="large-v3">${t("Best, slow (large-v3)")}</option></select></div>
       <div><label for="translator">${t("Translator")}</label>
-        <select id="translator"><option value="offline">${t("Offline on this laptop (NLLB)")}</option><option value="google">${t("Google Translate (needs internet)")}</option></select></div>
+        <select id="translator"><option value="llm">${t("AI on this laptop (Qwen) – best, slower")}</option><option value="offline">${t("Offline on this laptop (NLLB)")}</option><option value="google">${t("Google Translate (needs internet)")}</option></select></div>
       <div><label for="bg">${t("Original audio volume:")} <span id="bgv">25%</span></label>
         <input id="bg" type="range" min="0" max="100" value="25"></div>
       <div><label for="cookies" title="${t("Turn on when YouTube says 'Sign in to confirm you're not a bot'")}">${t("Sign in to YouTube via")}</label>

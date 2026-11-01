@@ -267,7 +267,9 @@ class Live:
         segs, chunk_lang = self._transcribe(_decode(audio_src, 16000))
         target = self.settings["target"]
         if segs:
-            P.translate(segs, self.settings.get("translator", "offline"), self.lang or chunk_lang, target, _quiet, lambda p: None)
+            # mô hình AI (Qwen) không vừa VRAM cùng lúc với Whisper đang chạy liên tục -> live dùng NLLB
+            engine = "offline" if self.settings.get("translator") == "llm" else self.settings.get("translator", "offline")
+            P.translate(segs, engine, self.lang or chunk_lang, target, _quiet, lambda p: None)
         t0 = self.t
         self.lines += [{"start": round(t0 + s["start"], 2), "end": round(t0 + s["end"], 2),
                         "text": s["text"], "tr": s["vi"]} for s in segs if s.get("vi")]
